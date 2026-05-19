@@ -1,0 +1,7 @@
+{
+  "name": "Dry Warehouse System v2",
+  "description": "Standard Warehouse Management System with batch-based tracking and QR labeling.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
