@@ -129,6 +129,37 @@ const Inventory: React.FC<InventoryProps> = ({ products, inventory, logs, curren
     return { label: 'AMAN', color: 'bg-emerald-500', text: 'text-white' };
   };
 
+  const getRestockEstimation = (p: Product) => {
+    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    const outLogs = logs.filter(l => String(l.productName) === p.name && l.type === 'OUT' && l.timestamp >= thirtyDaysAgo);
+    const totalOut = outLogs.reduce((acc, l) => acc + Math.abs(Number(l.quantityChange || 0)), 0);
+    const avgDailyOut = totalOut / 30;
+
+    const currentStock = p.stockToday || 0;
+    const safety = p.safetyStock || 0;
+    
+    if (avgDailyOut === 0) {
+      if (currentStock === 0) return { text: "Stok Habis", dateText: null, shouldRestock: true, tooltip: "Stok sudah habis." };
+      return { text: "Stagnan (0 Keluar)", dateText: null, shouldRestock: currentStock <= safety, tooltip: "Tidak ada pengeluaran stok 30 hari terakhir." };
+    }
+
+    const daysLeft = Math.floor(currentStock / avgDailyOut);
+    if (currentStock === 0) return { text: "Stok Habis", dateText: null, shouldRestock: true, tooltip: "Stok sudah habis." };
+    
+    // We consider "shouldRestock" if daysLeft is less than 7 or stock <= safety
+    const shouldRestock = daysLeft <= 7 || currentStock <= safety;
+
+    const estDate = new Date();
+    estDate.setDate(estDate.getDate() + daysLeft);
+
+    return { 
+      text: `${daysLeft} Hari Lagi`, 
+      dateText: formatDateReadable(estDate.toISOString()),
+      shouldRestock,
+      tooltip: `(${avgDailyOut.toFixed(1)} ${p.unit}/hari)`
+    };
+  };
+
   const exhaustionData = useMemo(() => {
     if (!selectedProduct) return null;
     const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
@@ -349,7 +380,8 @@ const Inventory: React.FC<InventoryProps> = ({ products, inventory, logs, curren
                       <tr><th className="px-6 py-4">Identitas Produk</th><th className="px-4 py-4 text-center">Unit</th><th className="px-4 py-4 text-right bg-red-50/20 text-red-600">Stok</th><th className="px-4 py-4 text-center">Status</th><th className="px-6 py-4 text-center">Aksi</th></tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {filteredRecap.map(p => (
+                      {filteredRecap.map(p => {
+                        return (
                         <tr key={p.id} className="hover:bg-slate-50/70 transition-all group">
                           <td className="px-6 py-4 cursor-pointer" onClick={() => setSelectedProduct(p)}>
                             <div className="font-black text-slate-900 uppercase text-[11px] leading-tight tracking-tight">{String(p.name)}</div>
@@ -363,7 +395,7 @@ const Inventory: React.FC<InventoryProps> = ({ products, inventory, logs, curren
                           <td className="px-4 py-4 text-center"><div className={`inline-flex items-center px-2 py-0.5 rounded-full text-[7px] font-black uppercase ${getStockStatus(p).color} ${getStockStatus(p).text}`}>{getStockStatus(p).label}</div></td>
                           <td className="px-6 py-4 text-center"><button onClick={() => setSelectedProduct(p)} className="p-2 text-slate-300 hover:text-slate-900"><Eye size={18} /></button></td>
                         </tr>
-                      ))}
+                      )})}
                     </tbody>
                 </table>
               </div>
@@ -421,9 +453,19 @@ const Inventory: React.FC<InventoryProps> = ({ products, inventory, logs, curren
             </div>
             <div className="flex-1 overflow-y-auto bg-slate-50">
                 <div className="m-4 p-5 bg-gradient-to-br from-slate-900 to-slate-800 rounded-3xl text-white shadow-xl flex flex-col md:flex-row gap-6">
-                    <div className="flex-1">
+                    <div className="flex-1 lg:border-r lg:border-white/10 lg:pr-6">
                       <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2"><TrendingDown size={12} className="text-red-500" /> Analisis Kecepatan Konsumsi</span>
                       <div className="flex items-end gap-3"><span className="text-3xl font-black">{exhaustionData?.avg.toFixed(2)}</span><span className="text-[10px] font-bold text-slate-400 uppercase mb-2">{String(selectedProduct.unit)} / Hari</span></div>
+                    </div>
+                    <div className="flex-1">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                         <Timer size={12} className="text-amber-500" /> Estimasi Habis 
+                         {getRestockEstimation(selectedProduct).dateText && <span className="text-[8px] tracking-widest bg-white/10 text-slate-300 px-2 py-0.5 rounded-full ml-1">{getRestockEstimation(selectedProduct).dateText}</span>}
+                      </span>
+                      <div className="flex items-end gap-3" title={getRestockEstimation(selectedProduct).tooltip}>
+                         <span className={`text-2xl font-black ${getRestockEstimation(selectedProduct).shouldRestock ? 'text-red-400' : 'text-emerald-400'}`}>{getRestockEstimation(selectedProduct).text}</span>
+                         {getRestockEstimation(selectedProduct).shouldRestock && <span className="text-[9px] font-black bg-white focus:outline-none text-red-600 px-2 py-0.5 rounded uppercase mb-1.5 tracking-widest">Restock!</span>}
+                      </div>
                     </div>
                 </div>
                 <div className="bg-white p-4"><div className="flex bg-slate-100 p-0.5 rounded-xl"><button onClick={() => setDetailTab('batches')} className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${detailTab === 'batches' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-400'}`}>Stiker</button><button onClick={() => setDetailTab('history')} className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${detailTab === 'history' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-400'}`}>Mutasi</button></div></div>
