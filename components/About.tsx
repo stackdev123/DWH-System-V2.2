@@ -37,6 +37,17 @@ const About: React.FC = () => {
 
   const updateLogs = [
     { 
+      version: "v2.1.2", 
+      date: "Mei 2026", 
+      items: [
+        "Peningkatan Ekspor Excel & PDF pada Monitor Kedaluwarsa",
+        "Penambahan Informasi Qty dan Tanggal Kedatangan pada Rekap Kedaluwarsa",
+        "Penambahan Laporan Rekap Per Item pada Ekspor Kedaluwarsa",
+        "Perbaikan Filter Tab 'Semua' pada Riwayat Transaksi",
+        "Fitur Expand (Klik) untuk Deskripsi & Catatan Panjang pada Laporan"
+      ] 
+    },
+    { 
       version: "v2.1.1", 
       date: "Januari 2025", 
       items: [
