@@ -517,7 +517,7 @@ const Inventory: React.FC<InventoryProps> = ({ products, inventory, logs, curren
                                        <div className="flex items-center gap-1.5">
                                           <Timer size={10} className="text-amber-500" />
                                           <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Exp: {formatDateReadable(item.expiryDate)}</span>
-                                          {item.note?.includes('[EXTENDED]') && <span className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-lg bg-blue-100 text-blue-700 ml-1">EXTENDED</span>}
+                                          {item.note?.includes('[EXTENDED]') && <span className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-lg bg-blue-100 text-blue-700 ml-1" title={item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] ? `Diperpanjang dari ${formatDateReadable(item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] || '')}` : 'Diperpanjang'}>{item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] ? `EXT DARI: ${formatDateReadable(item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] || '')}` : 'EXTENDED'}</span>}
                                           {isAdminOrSuper && (
                                               <button onClick={() => setExtendModal({ item })} className="ml-1 text-slate-400 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 p-1 rounded-md transition-colors" title="Extend Expired Date"><Edit3 size={10}/></button>
                                           )}

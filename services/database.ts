@@ -329,10 +329,10 @@ export const db = {
   },
 
   extendExpiryDate: async (uniqueId: string, newExpiryDate: string): Promise<void> => {
-    const { data: item } = await supabase.from('stock_items').select('note').eq('unique_id', uniqueId).single();
+    const { data: item } = await supabase.from('stock_items').select('note, expiry_date').eq('unique_id', uniqueId).single();
     let updatedNote = item?.note || '';
-    if (!updatedNote.includes('[EXTENDED]')) {
-      updatedNote = updatedNote ? updatedNote + ' [EXTENDED]' : '[EXTENDED]';
+    if (!updatedNote.includes(`[EXT_FROM:${item?.expiry_date}]`)) {
+      updatedNote = updatedNote ? updatedNote + ` [EXTENDED] [EXT_FROM:${item?.expiry_date}]` : `[EXTENDED] [EXT_FROM:${item?.expiry_date}]`;
     }
     const { error } = await supabase
       .from('stock_items')

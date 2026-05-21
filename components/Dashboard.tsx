@@ -164,7 +164,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
       'Status': item.isExpired ? 'EXPIRED' : `${item.daysLeft} Hari Lagi`,
       'Tgl Kedatangan': item.arrivalDate ? formatDateReadable(item.arrivalDate) : '-',
       'Tgl Expired': item.expiryDate ? (item.note?.includes('[EXTENDED]') ? formatDateReadable(item.expiryDate) + ' (EXT)' : formatDateReadable(item.expiryDate)) : '-',
-      'Catatan': item.note?.includes('[EXTENDED]') ? 'Diperpanjang' : '-'
+      'Catatan': item.note?.includes('[EXTENDED]') ? (item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] ? `Diperpanjang dari ${formatDateReadable(item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] || '')}` : 'Diperpanjang') : '-'
     })));
 
     const groupMap: Record<string, any> = {};
@@ -373,7 +373,9 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
                       {item.isExpired ? 'EXPIRED' : `${item.daysLeft} Hari Lagi`}
                     </span>
                     {item.note && item.note.includes('[EXTENDED]') && (
-                      <span className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-lg bg-blue-100 text-blue-700" title="Tanggal kedaluwarsa telah diperpanjang">EXTENDED</span>
+                      <span className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-lg bg-blue-100 text-blue-700" title={`Diperpanjang dari ${item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] ? formatDateReadable(item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] || '') : 'sebelumnya'}`}>
+                        {item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] ? `EXT DARI: ${formatDateReadable(item.note.match(/\[EXT_FROM:(.*?)\]/)?.[1] || '')}` : 'EXTENDED'}
+                      </span>
                     )}
                   </div>
                 </div>
