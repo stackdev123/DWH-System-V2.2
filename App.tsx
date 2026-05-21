@@ -489,7 +489,7 @@ export const App: React.FC = () => {
           </div>
         ) : (
           <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-            {activeTab === 'dashboard' && <Dashboard products={products} stock={stock} logs={logs} />}
+            {activeTab === 'dashboard' && <Dashboard products={products} stock={stock} logs={logs} currentUser={currentUser} onRefresh={() => loadAllData(true)} />}
             {activeTab === 'inventory' && <Inventory products={products} inventory={stock} logs={logs} currentUser={currentUser} onAdjust={handleAdjustment} onBulkAdjust={handleBulkAdjust} onRefresh={() => loadAllData(true)} />}
             {activeTab === 'sticker' && <LabelGenerator products={products} stock={stock} onAddStock={handleRegisterStock} />}
             {activeTab === 'transactions' && <Transactions products={products} stock={stock} onInbound={handleInbound} onOutbound={handleOutbound} onRefresh={() => loadAllData(true)} />}

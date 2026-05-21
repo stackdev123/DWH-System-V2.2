@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Product, StockItem, LogEntry } from '../types.ts';
+import { Product, StockItem, LogEntry, User } from '../types.ts';
+import { db } from '../services/database.ts';
 import { 
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   AreaChart, Area, PieChart, Pie, Cell, Legend
@@ -8,7 +9,7 @@ import {
   Package, AlertTriangle, 
   Activity, ArrowUpRight, ArrowDownLeft, PieChart as PieIcon,
   TrendingUp, Zap, Clock, Timer, AlertOctagon, TimerOff,
-  FileSpreadsheet, FileDown
+  FileSpreadsheet, FileDown, Lock, Check, Edit3, RefreshCw
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -18,11 +19,39 @@ interface DashboardProps {
   products: Product[];
   stock: StockItem[];
   logs: LogEntry[];
+  currentUser: User;
+  onRefresh?: () => Promise<void> | void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs }) => {
+const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUser, onRefresh }) => {
   const exportRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState(false);
+  
+  const [extendModal, setExtendModal] = useState<{ item: any } | null>(null);
+  const [extendForm, setExtendForm] = useState({ password: '', newDate: '' });
+  const [isExtending, setIsExtending] = useState(false);
+  const [extendError, setExtendError] = useState<string | null>(null);
+
+  const isAdminOrSuper = currentUser.role === 'Admin' || currentUser.role === 'SuperAdmin';
+
+  const handleExtendExpiry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!extendModal || isExtending) return;
+    setIsExtending(true);
+    setExtendError(null);
+    try {
+       const isValid = await db.verifyPassword(currentUser.username, extendForm.password);
+       if (!isValid) { setExtendError("Password verifikasi salah."); setIsExtending(false); return; }
+       await db.extendExpiryDate(extendModal.item.uniqueId, extendForm.newDate);
+       if (onRefresh) await onRefresh();
+       setExtendModal(null);
+       setExtendForm({ password: '', newDate: '' });
+    } catch(err: any) {
+       setExtendError("Gagal update tanggal: " + err.message);
+    } finally {
+       setIsExtending(false);
+    }
+  };
 
   const stats = useMemo(() => {
     const totalSKU = products.length;
@@ -134,7 +163,8 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs }) => {
       'Unit': products.find(p => p.id === item.productId)?.unit || '',
       'Status': item.isExpired ? 'EXPIRED' : `${item.daysLeft} Hari Lagi`,
       'Tgl Kedatangan': item.arrivalDate ? formatDateReadable(item.arrivalDate) : '-',
-      'Tgl Expired': item.expiryDate ? formatDateReadable(item.expiryDate) : '-'
+      'Tgl Expired': item.expiryDate ? (item.note?.includes('[EXTENDED]') ? formatDateReadable(item.expiryDate) + ' (EXT)' : formatDateReadable(item.expiryDate)) : '-',
+      'Catatan': item.note?.includes('[EXTENDED]') ? 'Diperpanjang' : '-'
     })));
 
     const groupMap: Record<string, any> = {};
@@ -342,11 +372,19 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs }) => {
                     <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded-lg ${item.isExpired ? 'bg-red-600 text-white' : 'bg-amber-500 text-white'}`}>
                       {item.isExpired ? 'EXPIRED' : `${item.daysLeft} Hari Lagi`}
                     </span>
+                    {item.note && item.note.includes('[EXTENDED]') && (
+                      <span className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-lg bg-blue-100 text-blue-700" title="Tanggal kedaluwarsa telah diperpanjang">EXTENDED</span>
+                    )}
                   </div>
                 </div>
-                <div className="text-right pl-4">
-                  <div className={`text-[10px] font-black ${item.isExpired ? 'text-red-600' : 'text-amber-600'}`}>{formatDateReadable(item.expiryDate)}</div>
-                  <div className="text-[8px] font-bold text-slate-400 uppercase">{item.quantity.toLocaleString()} {products.find(p => p.id === item.productId)?.unit}</div>
+                <div className="flex items-center gap-3 pl-4">
+                  <div className="text-right">
+                    <div className={`text-[10px] font-black ${item.isExpired ? 'text-red-600' : 'text-amber-600'}`}>{formatDateReadable(item.expiryDate)}</div>
+                    <div className="text-[8px] font-bold text-slate-400 uppercase">{item.quantity.toLocaleString()} {products.find(p => p.id === item.productId)?.unit}</div>
+                  </div>
+                  {isAdminOrSuper && (
+                    <button onClick={() => setExtendModal({ item })} className={`p-1.5 rounded-lg transition-colors ${item.isExpired ? 'text-red-400 hover:text-red-700 hover:bg-red-100' : 'text-amber-400 hover:text-amber-700 hover:bg-amber-100'}`} title="Extend Expired Date"><Edit3 size={12}/></button>
+                  )}
                 </div>
               </div>
             ))}
@@ -479,7 +517,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs }) => {
                       {item.isExpired ? 'EXPIRED' : `${item.daysLeft} Hari Lagi`}
                     </td>
                     <td className="px-4 py-3 border-r border-slate-100 text-right uppercase">{item.arrivalDate ? formatDateReadable(item.arrivalDate) : '-'}</td>
-                    <td className="px-4 py-3 text-right uppercase">{item.expiryDate ? formatDateReadable(item.expiryDate) : '-'}</td>
+                    <td className="px-4 py-3 text-right uppercase">{item.expiryDate ? (item.note?.includes('[EXTENDED]') ? formatDateReadable(item.expiryDate) + ' (EXT)' : formatDateReadable(item.expiryDate)) : '-'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -487,6 +525,45 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs }) => {
           </div>
         </div>
       </div>
+
+      {/* EXTEND EXPIRY MODAL */}
+      {extendModal && (
+        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+           <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 max-w-sm w-full border border-slate-100 animate-in zoom-in-95">
+              <div className="flex flex-col items-center text-center mb-6">
+                <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-inner bg-blue-50 text-blue-600">
+                   <Timer size={32} />
+                </div>
+                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Extend Tanggal</h3>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2 px-4 leading-relaxed">
+                   Batch: {extendModal.item.batchCode}
+                </p>
+              </div>
+
+              <form onSubmit={handleExtendExpiry} className="space-y-4">
+                 <div className="space-y-3 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    <div>
+                        <label className="block text-[8px] font-black text-slate-400 uppercase mb-1 ml-1">New Expired Date</label>
+                        <input type="date" required className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none" value={extendForm.newDate} onChange={e => setExtendForm({...extendForm, newDate: e.target.value})} />
+                    </div>
+                 </div>
+
+                 <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                    <input type="password" autoFocus required className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 font-bold outline-none" placeholder="Admin Password..." value={extendForm.password} onChange={e => setExtendForm({...extendForm, password: e.target.value})} />
+                 </div>
+                 {extendError && <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-red-600 text-[10px] font-bold uppercase">{extendError}</div>}
+                 
+                 <div className="flex flex-col gap-3">
+                    <button type="submit" disabled={isExtending || !extendForm.password || !extendForm.newDate} className="w-full py-4 text-white rounded-2xl font-black uppercase text-[11px] tracking-[0.2em] shadow-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 bg-blue-600">
+                      {isExtending ? <RefreshCw className="animate-spin" size={16}/> : <Check size={16}/>} KONFIRMASI
+                    </button>
+                    <button type="button" onClick={() => setExtendModal(null)} className="w-full py-3 text-slate-400 font-black uppercase text-[10px] tracking-widest hover:bg-slate-50 rounded-xl">BATAL</button>
+                 </div>
+              </form>
+           </div>
+        </div>
+      )}
     </div>
   );
 };

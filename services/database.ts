@@ -328,6 +328,19 @@ export const db = {
     if (error) throw error;
   },
 
+  extendExpiryDate: async (uniqueId: string, newExpiryDate: string): Promise<void> => {
+    const { data: item } = await supabase.from('stock_items').select('note').eq('unique_id', uniqueId).single();
+    let updatedNote = item?.note || '';
+    if (!updatedNote.includes('[EXTENDED]')) {
+      updatedNote = updatedNote ? updatedNote + ' [EXTENDED]' : '[EXTENDED]';
+    }
+    const { error } = await supabase
+      .from('stock_items')
+      .update({ expiry_date: newExpiryDate, note: updatedNote })
+      .eq('unique_id', uniqueId);
+    if (error) throw error;
+  },
+
   addLogEntries: async (logs: LogEntry[]): Promise<void> => {
     const payload = logs.map(l => ({
       id: l.id,

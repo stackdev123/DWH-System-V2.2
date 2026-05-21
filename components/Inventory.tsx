@@ -4,7 +4,7 @@ import {
   Search, Package, AlertTriangle, RefreshCw, X, Tag, FileSpreadsheet, 
   Eye, Settings2, Plus, Minus, ScanLine, User as UserIcon, Activity, 
   Database, Clock, Calendar, Hash, FileText, TrendingDown, Timer, Printer,
-  Info, Filter, Activity as StatusIcon, Truck, ChevronRight
+  Info, Filter, Activity as StatusIcon, Truck, ChevronRight, Lock, Check, Edit3
 } from 'lucide-react';
 import StockOpname from './StockOpname.tsx';
 import MasterData from './MasterData.tsx';
@@ -39,6 +39,11 @@ const Inventory: React.FC<InventoryProps> = ({ products, inventory, logs, curren
 
   const [manageForm, setManageForm] = useState({ safetyStock: 0, adjustQty: 0, adjustNote: '' });
   const [isAdminSubmitting, setIsAdminSubmitting] = useState(false);
+
+  const [extendModal, setExtendModal] = useState<{ item: StockItem } | null>(null);
+  const [extendForm, setExtendForm] = useState({ password: '', newDate: '' });
+  const [isExtending, setIsExtending] = useState(false);
+  const [extendError, setExtendError] = useState<string | null>(null);
 
   const isViewer = currentUser.role === 'Viewer';
   const isAdminOrSuper = currentUser.role === 'Admin' || currentUser.role === 'SuperAdmin';
@@ -97,6 +102,25 @@ const Inventory: React.FC<InventoryProps> = ({ products, inventory, logs, curren
     const day = String(d.getDate()).padStart(2, '0');
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
     return `${day} ${months[d.getMonth()]} ${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+
+  const handleExtendExpiry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!extendModal || isExtending) return;
+    setIsExtending(true);
+    setExtendError(null);
+    try {
+       const isValid = await db.verifyPassword(currentUser.username, extendForm.password);
+       if (!isValid) { setExtendError("Password verifikasi salah."); setIsExtending(false); return; }
+       await db.extendExpiryDate(extendModal.item.uniqueId, extendForm.newDate);
+       if (onRefresh) await onRefresh();
+       setExtendModal(null);
+       setExtendForm({ password: '', newDate: '' });
+    } catch(err: any) {
+       setExtendError("Gagal update tanggal: " + err.message);
+    } finally {
+       setIsExtending(false);
+    }
   };
 
   const handleScanCheck = (id: string | string[]) => {
@@ -493,6 +517,10 @@ const Inventory: React.FC<InventoryProps> = ({ products, inventory, logs, curren
                                        <div className="flex items-center gap-1.5">
                                           <Timer size={10} className="text-amber-500" />
                                           <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Exp: {formatDateReadable(item.expiryDate)}</span>
+                                          {item.note?.includes('[EXTENDED]') && <span className="text-[7px] font-black uppercase px-1.5 py-0.5 rounded-lg bg-blue-100 text-blue-700 ml-1">EXTENDED</span>}
+                                          {isAdminOrSuper && (
+                                              <button onClick={() => setExtendModal({ item })} className="ml-1 text-slate-400 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 p-1 rounded-md transition-colors" title="Extend Expired Date"><Edit3 size={10}/></button>
+                                          )}
                                        </div>
                                      )}
                                   </div>
@@ -548,6 +576,45 @@ const Inventory: React.FC<InventoryProps> = ({ products, inventory, logs, curren
             </div>
             <div className="p-4 border-t border-slate-100 bg-white"><button onClick={() => setSelectedProduct(null)} className="w-full py-3 bg-slate-950 text-white rounded-xl font-black uppercase text-[9px] tracking-widest">TUTUP</button></div>
           </div>
+        </div>
+      )}
+
+      {/* EXTEND EXPIRY MODAL */}
+      {extendModal && (
+        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+           <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 max-w-sm w-full border border-slate-100 animate-in zoom-in-95">
+              <div className="flex flex-col items-center text-center mb-6">
+                <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-inner bg-blue-50 text-blue-600">
+                   <Timer size={32} />
+                </div>
+                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Extend Tanggal</h3>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2 px-4 leading-relaxed">
+                   Batch: {extendModal.item.batchCode}
+                </p>
+              </div>
+
+              <form onSubmit={handleExtendExpiry} className="space-y-4">
+                 <div className="space-y-3 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                    <div>
+                        <label className="block text-[8px] font-black text-slate-400 uppercase mb-1 ml-1">New Expired Date</label>
+                        <input type="date" required className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none" value={extendForm.newDate} onChange={e => setExtendForm({...extendForm, newDate: e.target.value})} />
+                    </div>
+                 </div>
+
+                 <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                    <input type="password" autoFocus required className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 font-bold outline-none" placeholder="Admin Password..." value={extendForm.password} onChange={e => setExtendForm({...extendForm, password: e.target.value})} />
+                 </div>
+                 {extendError && <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-red-600 text-[10px] font-bold uppercase">{extendError}</div>}
+                 
+                 <div className="flex flex-col gap-3">
+                    <button type="submit" disabled={isExtending || !extendForm.password || !extendForm.newDate} className="w-full py-4 text-white rounded-2xl font-black uppercase text-[11px] tracking-[0.2em] shadow-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 bg-blue-600">
+                      {isExtending ? <RefreshCw className="animate-spin" size={16}/> : <Check size={16}/>} KONFIRMASI
+                    </button>
+                    <button type="button" onClick={() => setExtendModal(null)} className="w-full py-3 text-slate-400 font-black uppercase text-[10px] tracking-widest hover:bg-slate-50 rounded-xl">BATAL</button>
+                 </div>
+              </form>
+           </div>
         </div>
       )}
     </div>
