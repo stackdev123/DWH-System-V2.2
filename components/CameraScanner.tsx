@@ -126,8 +126,8 @@ const CameraScanner: React.FC<CameraScannerProps> = ({ onScan, onClose, stockIte
         { facingMode: "environment" }, 
         { 
           fps: 30, 
-          // HAPUS qrbox agar library melakukan scan di seluruh frame video
-          // Hal ini mencegah library merender kotak default-nya yang bertabrakan dengan UI kustom
+          // Menggunakan qrbox agar deteksi lebih fokus dan akurat
+          qrbox: 240,
           aspectRatio: 1.0
         }, 
         (text: string) => handleDetected(text), 
@@ -297,7 +297,7 @@ const CameraScanner: React.FC<CameraScannerProps> = ({ onScan, onClose, stockIte
 
       <style>{`
         /* Sembunyikan elemen UI bawaan library html5-qrcode agar tidak tumpang tindih */
-        div[id^="reader__"] {
+        div[id^="reader__"], #qr-shaded-region {
           display: none !important;
         }
         
