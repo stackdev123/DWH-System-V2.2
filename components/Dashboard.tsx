@@ -1,12 +1,12 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Product, StockItem, LogEntry, User } from '../types.ts';
 import { db } from '../services/database.ts';
-import { 
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+import {
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area, PieChart, Pie, Cell, Legend
 } from 'recharts';
-import { 
-  Package, AlertTriangle, 
+import {
+  Package, AlertTriangle,
   Activity, ArrowUpRight, ArrowDownLeft, PieChart as PieIcon,
   TrendingUp, Zap, Clock, Timer, AlertOctagon, TimerOff,
   FileSpreadsheet, FileDown, Lock, Check, Edit3, RefreshCw
@@ -26,7 +26,7 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUser, onRefresh }) => {
   const exportRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState(false);
-  
+
   const [extendModal, setExtendModal] = useState<{ item: any } | null>(null);
   const [extendForm, setExtendForm] = useState({ password: '', newDate: '' });
   const [isExtending, setIsExtending] = useState(false);
@@ -40,28 +40,28 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
     setIsExtending(true);
     setExtendError(null);
     try {
-       const isValid = await db.verifyPassword(currentUser.username, extendForm.password);
-       if (!isValid) { setExtendError("Password verifikasi salah."); setIsExtending(false); return; }
-       await db.extendExpiryDate(extendModal.item.uniqueId, extendForm.newDate);
-       if (onRefresh) await onRefresh();
-       setExtendModal(null);
-       setExtendForm({ password: '', newDate: '' });
-    } catch(err: any) {
-       setExtendError("Gagal update tanggal: " + err.message);
+      const isValid = await db.verifyPassword(currentUser.username, extendForm.password);
+      if (!isValid) { setExtendError("Password verifikasi salah."); setIsExtending(false); return; }
+      await db.extendExpiryDate(extendModal.item.uniqueId, extendForm.newDate);
+      if (onRefresh) await onRefresh();
+      setExtendModal(null);
+      setExtendForm({ password: '', newDate: '' });
+    } catch (err: any) {
+      setExtendError("Gagal update tanggal: " + err.message);
     } finally {
-       setIsExtending(false);
+      setIsExtending(false);
     }
   };
 
   const stats = useMemo(() => {
     const totalSKU = products.length;
     // Filter critical items: must be active, must have safety stock > 0, and current stock <= safety stock
-    const criticalItems = products.filter(p => 
-      p.isActive !== false && 
-      (p.safetyStock || 0) > 0 && 
+    const criticalItems = products.filter(p =>
+      p.isActive !== false &&
+      (p.safetyStock || 0) > 0 &&
       (p.stockToday || 0) <= (p.safetyStock || 0)
     );
-    
+
     const startOfDay = new Date().setHours(0, 0, 0, 0);
     const todayLogs = logs.filter(l => l.timestamp >= startOfDay);
     const todayIn = todayLogs.filter(l => l.type === 'IN').reduce((acc, l) => acc + (l.quantityChange || 0), 0);
@@ -81,7 +81,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
       const dayStart = new Date(date).setHours(0, 0, 0, 0);
       const dayEnd = new Date(date).setHours(23, 59, 59, 999);
       const dayLogs = logs.filter(l => l.timestamp >= dayStart && l.timestamp <= dayEnd);
-      
+
       return {
         name: new Date(date).toLocaleDateString('id-ID', { weekday: 'short' }),
         masuk: dayLogs.filter(l => l.type === 'IN').reduce((acc, l) => acc + (l.quantityChange || 0), 0),
@@ -96,7 +96,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
     oneMonthLater.setMonth(now.getMonth() + 1);
 
     const alerts = stock.filter(s => {
-      if (s.quantity <= 0 || !s.expiryDate || s.expiryDate === '-' || s.expiryDate === 'NOEXP') return false;
+      if (s.status === 'CREATED' || s.quantity <= 0 || !s.expiryDate || s.expiryDate === '-' || s.expiryDate === 'NOEXP') return false;
       const prod = products.find(p => p.id === s.productId);
       return prod && prod.isActive !== false;
     }).map(s => {
@@ -112,7 +112,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
   const topVelocityItems = useMemo(() => {
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const outByProd: Record<string, { total: number, unit: string }> = {};
-    
+
     logs.filter(l => l.type === 'OUT' && l.timestamp >= thirtyDaysAgo).forEach(l => {
       const prod = products.find(p => p.name === l.productName);
       if (!outByProd[l.productName]) {
@@ -139,7 +139,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
     const entries = Object.entries(cats)
       .map(([name, value]) => ({ name, value }))
       .filter(e => e.value > 0);
-    
+
     return entries.length > 0 ? entries : [{ name: 'N/A', value: 0 }];
   }, [products]);
 
@@ -171,10 +171,10 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
     expiryAlerts.forEach(item => {
       if (!groupMap[item.productName]) {
         groupMap[item.productName] = {
-           'Barang': item.productName,
-           'Total QTY Alert': 0,
-           'Unit': products.find(p => p.id === item.productId)?.unit || '',
-           'Banyak Batch': 0
+          'Barang': item.productName,
+          'Total QTY Alert': 0,
+          'Unit': products.find(p => p.id === item.productId)?.unit || '',
+          'Banyak Batch': 0
         };
       }
       groupMap[item.productName]['Total QTY Alert'] += item.quantity;
@@ -210,9 +210,9 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-[2rem] border border-slate-200 shadow-sm flex flex-col gap-3">
           <div className="w-10 h-10 bg-slate-900 text-white rounded-2xl flex items-center justify-center overflow-hidden">
-            <img 
-              src="logo2.png" 
-              alt="BSI" 
+            <img
+              src="logo2.png"
+              alt="BSI"
               className="w-7 h-7 object-contain"
               onError={(e) => {
                 (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTIxIDE2VjhMMTIgNEwzIDhWMTZMMTIgMjBMMjEgMTZaIi8+PHBhdGggZD0iTTEyIDIyVjEyIi8+PHBhdGggZD0iTTMgOEwxMiAxMkwyMSA4Ii8+PC9zdmc+';
@@ -224,7 +224,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
             <span className="text-2xl font-black text-slate-900">{stats.totalSKU}</span>
           </div>
         </div>
-        
+
         <div className={`p-5 rounded-[2rem] border shadow-sm flex flex-col gap-3 ${stats.lowStockCount > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-slate-200'}`}>
           <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${stats.lowStockCount > 0 ? 'bg-red-600 text-white shadow-lg' : 'bg-slate-100 text-slate-600'}`}>
             <AlertTriangle size={20} />
@@ -272,38 +272,38 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
               <AreaChart data={trendData}>
                 <defs>
                   <linearGradient id="colorIn" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.15}/>
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="colorOut" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.15}/>
-                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 10, fontWeight: 900, fill: '#94a3b8'}} />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 900, fill: '#94a3b8' }} />
                 <YAxis hide />
-                <Tooltip 
-                  contentStyle={{borderRadius: '20px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', fontSize: '10px', fontWeight: 'bold'}}
+                <Tooltip
+                  contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', fontSize: '10px', fontWeight: 'bold' }}
                   formatter={(value: any) => [value.toLocaleString(), '']}
                 />
-                <Area 
-                  type="monotone" 
-                  dataKey="masuk" 
-                  name="Masuk" 
-                  stroke="#10b981" 
-                  fillOpacity={1} 
-                  fill="url(#colorIn)" 
-                  strokeWidth={4} 
+                <Area
+                  type="monotone"
+                  dataKey="masuk"
+                  name="Masuk"
+                  stroke="#10b981"
+                  fillOpacity={1}
+                  fill="url(#colorIn)"
+                  strokeWidth={4}
                 />
-                <Area 
-                  type="monotone" 
-                  dataKey="keluar" 
-                  name="Keluar" 
-                  stroke="#ef4444" 
-                  fillOpacity={1} 
-                  fill="url(#colorOut)" 
-                  strokeWidth={4} 
+                <Area
+                  type="monotone"
+                  dataKey="keluar"
+                  name="Keluar"
+                  stroke="#ef4444"
+                  fillOpacity={1}
+                  fill="url(#colorOut)"
+                  strokeWidth={4}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -322,10 +322,10 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
                   <span className="text-red-500">{item.total.toLocaleString()} {item.unit}</span>
                 </div>
                 <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
-                   <div 
-                     className="h-full bg-red-600 transition-all duration-1000" 
-                     style={{ width: `${(item.total / (topVelocityItems[0]?.total || 1)) * 100}%` }}
-                   />
+                  <div
+                    className="h-full bg-red-600 transition-all duration-1000"
+                    style={{ width: `${(item.total / (topVelocityItems[0]?.total || 1)) * 100}%` }}
+                  />
                 </div>
               </div>
             ))}
@@ -385,7 +385,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
                     <div className="text-[8px] font-bold text-slate-400 uppercase">{item.quantity.toLocaleString()} {products.find(p => p.id === item.productId)?.unit}</div>
                   </div>
                   {isAdminOrSuper && (
-                    <button onClick={() => setExtendModal({ item })} className={`p-1.5 rounded-lg transition-colors ${item.isExpired ? 'text-red-400 hover:text-red-700 hover:bg-red-100' : 'text-amber-400 hover:text-amber-700 hover:bg-amber-100'}`} title="Extend Expired Date"><Edit3 size={12}/></button>
+                    <button onClick={() => setExtendModal({ item })} className={`p-1.5 rounded-lg transition-colors ${item.isExpired ? 'text-red-400 hover:text-red-700 hover:bg-red-100' : 'text-amber-400 hover:text-amber-700 hover:bg-amber-100'}`} title="Extend Expired Date"><Edit3 size={12} /></button>
                   )}
                 </div>
               </div>
@@ -428,7 +428,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
           </div>
         </div>
       </div>
-      
+
       <div className="bg-white p-6 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col min-h-[350px]">
         <div className="flex items-center justify-between mb-8">
           <h3 className="text-[11px] font-black text-slate-800 uppercase tracking-widest flex items-center gap-3">
@@ -455,7 +455,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
                 ))}
               </Pie>
               <Tooltip formatter={(value: any) => [value.toLocaleString(), 'Total Stok']} />
-              <Legend verticalAlign="bottom" iconType="circle" wrapperStyle={{fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', paddingTop: '20px'}} />
+              <Legend verticalAlign="bottom" iconType="circle" wrapperStyle={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', paddingTop: '20px' }} />
             </PieChart>
           </ResponsiveContainer>
         </div>
@@ -468,7 +468,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
             <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">Laporan Rekap Kedaluwarsa</h1>
             <p className="text-sm font-bold text-slate-500 uppercase mt-2">DWH BSI SYSTEM • {formatDateReadable(new Date().toISOString())}</p>
           </div>
-          
+
           <div className="mb-6">
             <h2 className="text-lg font-black text-slate-800 uppercase tracking-widest mb-3 border-l-4 border-red-600 pl-3">Rekap Per Item</h2>
             <table className="w-full text-left text-xs border-collapse">
@@ -485,7 +485,7 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
                   acc[item.productName].qty += item.quantity;
                   acc[item.productName].count += 1;
                   return acc;
-                }, {} as Record<string, {name: string, qty: number, unit: string, count: number}>)).map((g, i) => (
+                }, {} as Record<string, { name: string, qty: number, unit: string, count: number }>)).map((g, i) => (
                   <tr key={i}>
                     <td className="px-4 py-3 border-r border-slate-100">{g.name}</td>
                     <td className="px-4 py-3 border-r border-slate-100 text-right text-red-600">{g.qty.toLocaleString()} <span className="text-[10px] text-slate-400">{g.unit}</span></td>
@@ -531,39 +531,39 @@ const Dashboard: React.FC<DashboardProps> = ({ products, stock, logs, currentUse
       {/* EXTEND EXPIRY MODAL */}
       {extendModal && (
         <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-           <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 max-w-sm w-full border border-slate-100 animate-in zoom-in-95">
-              <div className="flex flex-col items-center text-center mb-6">
-                <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-inner bg-blue-50 text-blue-600">
-                   <Timer size={32} />
+          <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 max-w-sm w-full border border-slate-100 animate-in zoom-in-95">
+            <div className="flex flex-col items-center text-center mb-6">
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 shadow-inner bg-blue-50 text-blue-600">
+                <Timer size={32} />
+              </div>
+              <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Extend Tanggal</h3>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2 px-4 leading-relaxed">
+                Batch: {extendModal.item.batchCode}
+              </p>
+            </div>
+
+            <form onSubmit={handleExtendExpiry} className="space-y-4">
+              <div className="space-y-3 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                <div>
+                  <label className="block text-[8px] font-black text-slate-400 uppercase mb-1 ml-1">New Expired Date</label>
+                  <input type="date" required className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none" value={extendForm.newDate} onChange={e => setExtendForm({ ...extendForm, newDate: e.target.value })} />
                 </div>
-                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Extend Tanggal</h3>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2 px-4 leading-relaxed">
-                   Batch: {extendModal.item.batchCode}
-                </p>
               </div>
 
-              <form onSubmit={handleExtendExpiry} className="space-y-4">
-                 <div className="space-y-3 p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                    <div>
-                        <label className="block text-[8px] font-black text-slate-400 uppercase mb-1 ml-1">New Expired Date</label>
-                        <input type="date" required className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none" value={extendForm.newDate} onChange={e => setExtendForm({...extendForm, newDate: e.target.value})} />
-                    </div>
-                 </div>
+              <div className="relative">
+                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input type="password" autoFocus required className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 font-bold outline-none" placeholder="Admin Password..." value={extendForm.password} onChange={e => setExtendForm({ ...extendForm, password: e.target.value })} />
+              </div>
+              {extendError && <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-red-600 text-[10px] font-bold uppercase">{extendError}</div>}
 
-                 <div className="relative">
-                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                    <input type="password" autoFocus required className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 pl-12 pr-4 text-slate-900 font-bold outline-none" placeholder="Admin Password..." value={extendForm.password} onChange={e => setExtendForm({...extendForm, password: e.target.value})} />
-                 </div>
-                 {extendError && <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-red-600 text-[10px] font-bold uppercase">{extendError}</div>}
-                 
-                 <div className="flex flex-col gap-3">
-                    <button type="submit" disabled={isExtending || !extendForm.password || !extendForm.newDate} className="w-full py-4 text-white rounded-2xl font-black uppercase text-[11px] tracking-[0.2em] shadow-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 bg-blue-600">
-                      {isExtending ? <RefreshCw className="animate-spin" size={16}/> : <Check size={16}/>} KONFIRMASI
-                    </button>
-                    <button type="button" onClick={() => setExtendModal(null)} className="w-full py-3 text-slate-400 font-black uppercase text-[10px] tracking-widest hover:bg-slate-50 rounded-xl">BATAL</button>
-                 </div>
-              </form>
-           </div>
+              <div className="flex flex-col gap-3">
+                <button type="submit" disabled={isExtending || !extendForm.password || !extendForm.newDate} className="w-full py-4 text-white rounded-2xl font-black uppercase text-[11px] tracking-[0.2em] shadow-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 bg-blue-600">
+                  {isExtending ? <RefreshCw className="animate-spin" size={16} /> : <Check size={16} />} KONFIRMASI
+                </button>
+                <button type="button" onClick={() => setExtendModal(null)} className="w-full py-3 text-slate-400 font-black uppercase text-[10px] tracking-widest hover:bg-slate-50 rounded-xl">BATAL</button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>
