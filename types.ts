@@ -9,7 +9,7 @@ export enum ItemStatus {
 
 export interface User {
   username: string;
-  role: 'SuperAdmin' | 'Admin' | 'User' | 'UserMT' | 'UserGA' | 'UserHRGA' | 'Viewer';
+  role: 'SuperAdmin' | 'Admin' | 'AdminPPIC' | 'User' | 'UserMT' | 'UserGA' | 'UserHRGA' | 'Viewer';
 }
 
 export interface Product {
@@ -41,8 +41,8 @@ export interface InventorySummary {
 }
 
 export interface StockItem {
-  id?: number; 
-  uniqueId: string; 
+  id?: number;
+  uniqueId: string;
   productId: string;
   productName: string;
   batchCode?: string;
@@ -59,7 +59,7 @@ export interface StockItem {
 export interface LogEntry {
   id: string;
   type: 'IN' | 'OUT' | 'CREATE' | 'ADJUST';
-  stockItemId: string; 
+  stockItemId: string;
   productName: string;
   timestamp: number;
   recipient?: string;

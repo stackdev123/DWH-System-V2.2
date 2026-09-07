@@ -10,11 +10,11 @@ import LabelGenerator from './components/LabelGenerator.tsx';
 import Dashboard from './components/Dashboard.tsx';
 import SimpleInventoryModule from './components/SimpleInventoryModule.tsx';
 import OnlineUsers from './components/OnlineUsers.tsx';
-import { 
+import {
   ArrowLeftRight,
-  Package, 
-  History as HistoryIcon, 
-  Info, 
+  Package,
+  History as HistoryIcon,
+  Info,
   LogOut,
   RefreshCw,
   Tag,
@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 
 const SESSION_KEY = 'dwh_bsi_session';
-const SESSION_TIMEOUT = 4 * 60 * 60 * 1000; 
+const SESSION_TIMEOUT = 4 * 60 * 60 * 1000;
 
 interface StockNotification {
   id: string;
@@ -63,14 +63,14 @@ export const App: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [notifications, setNotifications] = useState<StockNotification[]>([]);
-  
+
   const prevStocksRef = useRef<Record<string, number>>({});
   const notifiedExpiryRef = useRef<Set<string>>(new Set());
 
   // Fungsi Notifikasi Native HP (System Banner)
   const sendSystemNotification = (title: string, body: string) => {
     if (!("Notification" in window)) return;
-    
+
     if (Notification.permission === "granted") {
       try {
         // Gunakan Service Worker untuk keandalan di mobile/PWA
@@ -104,7 +104,7 @@ export const App: React.FC = () => {
       const gain = ctx.createGain();
       osc.connect(gain);
       gain.connect(ctx.destination);
-      
+
       if (type === 'EMPTY' || type === 'EXPIRED') {
         osc.frequency.setValueAtTime(440, ctx.currentTime);
         gain.gain.setValueAtTime(0.1, ctx.currentTime);
@@ -116,7 +116,7 @@ export const App: React.FC = () => {
         osc.start();
         osc.stop(ctx.currentTime + 0.1);
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const loadAllData = useCallback(async (silent = false) => {
@@ -138,16 +138,16 @@ export const App: React.FC = () => {
       if (currentHour >= 8 && lastMorningReport !== todayDateStr && p.length > 0) {
         const empty = p.filter(prod => prod.isActive !== false && (prod.stockToday || 0) <= 0).length;
         const critical = p.filter(prod => prod.isActive !== false && (prod.safetyStock || 0) > 0 && (prod.stockToday || 0) <= (prod.safetyStock || 0) && (prod.stockToday || 0) > 0).length;
-        
+
         const oneMonthLater = new Date();
         oneMonthLater.setMonth(now.getMonth() + 1);
-        
+
         const expired = s.filter(item => {
           if (item.quantity <= 0 || !item.expiryDate || item.expiryDate === '-' || item.expiryDate === 'NOEXP') return false;
           const prod = p.find(master => master.id === item.productId);
           return prod && prod.isActive !== false && new Date(item.expiryDate) <= now;
         }).length;
-        
+
         const soon = s.filter(item => {
           if (item.quantity <= 0 || !item.expiryDate || item.expiryDate === '-' || item.expiryDate === 'NOEXP') return false;
           const prod = p.find(master => master.id === item.productId);
@@ -159,7 +159,7 @@ export const App: React.FC = () => {
           const reportBody = `Update 08:00 - ${empty} Habis, ${critical} Kritis, ${expired} Expired, ${soon} Segera Expired.`;
           sendSystemNotification("Laporan Inventaris Pagi", reportBody);
           playAlertSound('CRITICAL');
-          
+
           // Fix: Explicitly cast the object literal to StockNotification to prevent type widening (type: string)
           setNotifications(prev => [{
             id: `MORNING-${Date.now()}`,
@@ -178,7 +178,7 @@ export const App: React.FC = () => {
         const newNotifs: StockNotification[] = [];
         const oneMonthLater = new Date();
         oneMonthLater.setMonth(now.getMonth() + 1);
-        
+
         p.forEach(prod => {
           const prevVal = prevStocksRef.current[prod.id];
           const newVal = prod.stockToday || 0;
@@ -196,7 +196,7 @@ export const App: React.FC = () => {
               });
               sendSystemNotification("CRITICAL: STOK HABIS", `${prod.name} telah habis.`);
               playAlertSound('EMPTY');
-            } 
+            }
             else if (prevVal > safety && newVal <= safety && newVal > 0) {
               newNotifs.push({
                 id: `CRIT-${prod.id}-${Date.now()}`,
@@ -244,7 +244,7 @@ export const App: React.FC = () => {
       else setActiveTab('dashboard');
 
       loadAllData();
-      
+
       const channel = supabase
         .channel('schema-db-changes')
         .on(
@@ -310,7 +310,7 @@ export const App: React.FC = () => {
         user: currentUser.username
       }));
 
-      await db.addStockItems(items.map(i => ({ ...i, status: ItemStatus.IN_STOCK, note: i.note || note })));      
+      await db.addStockItems(items.map(i => ({ ...i, status: ItemStatus.IN_STOCK, note: i.note || note })));
       await db.addLogEntries(logEntries);
       await loadAllData(true);
     } catch (error) {
@@ -387,9 +387,9 @@ export const App: React.FC = () => {
   const navItems = useMemo(() => {
     if (!currentUser) return [];
     const items = [];
-    const isFullAccess = currentUser.role === 'SuperAdmin' || currentUser.role === 'Admin' || currentUser.role === 'User';
+    const isFullAccess = currentUser.role === 'SuperAdmin' || currentUser.role === 'Admin' || currentUser.role === 'AdminPPIC' || currentUser.role === 'User' || currentUser.username.toLowerCase() === 'adminppic';
     const isViewer = currentUser.role === 'Viewer';
-    
+
     if (isFullAccess || isViewer) {
       items.push({ id: 'dashboard', label: 'Beranda', icon: <LayoutDashboard size={16} /> });
       items.push({ id: 'inventory', label: 'Inventaris', icon: <Package size={16} /> });
@@ -420,15 +420,14 @@ export const App: React.FC = () => {
       {/* Toast Overlay untuk Notifikasi di dalam Aplikasi */}
       <div className="fixed top-20 right-4 left-4 md:left-auto md:w-96 z-[9999] pointer-events-none flex flex-col gap-3">
         {notifications.map((notif) => (
-          <div key={notif.id} className={`pointer-events-auto p-4 rounded-2xl shadow-2xl flex items-start gap-4 animate-in slide-in-from-right-10 duration-300 border ${
-            notif.type === 'EMPTY' || notif.type === 'EXPIRED' ? 'bg-red-600 text-white border-red-500' : 
-            notif.type === 'CRITICAL' || notif.type === 'EXPIRING_SOON' ? 'bg-amber-500 text-white border-amber-400' : 
-            'bg-emerald-600 text-white border-emerald-500'
-          }`}>
+          <div key={notif.id} className={`pointer-events-auto p-4 rounded-2xl shadow-2xl flex items-start gap-4 animate-in slide-in-from-right-10 duration-300 border ${notif.type === 'EMPTY' || notif.type === 'EXPIRED' ? 'bg-red-600 text-white border-red-500' :
+              notif.type === 'CRITICAL' || notif.type === 'EXPIRING_SOON' ? 'bg-amber-500 text-white border-amber-400' :
+                'bg-emerald-600 text-white border-emerald-500'
+            }`}>
             <div className="bg-white/20 p-2 rounded-xl shrink-0">
-              {notif.type === 'EMPTY' || notif.type === 'EXPIRED' ? <AlertOctagon size={24} /> : 
-               notif.type === 'CRITICAL' || notif.type === 'EXPIRING_SOON' ? <AlertTriangle size={24} /> : 
-               <ArrowDownCircle size={24} />}
+              {notif.type === 'EMPTY' || notif.type === 'EXPIRED' ? <AlertOctagon size={24} /> :
+                notif.type === 'CRITICAL' || notif.type === 'EXPIRING_SOON' ? <AlertTriangle size={24} /> :
+                  <ArrowDownCircle size={24} />}
             </div>
             <div className="flex-1 min-w-0">
               <h4 className="text-[10px] font-black uppercase tracking-widest leading-none opacity-80">{notif.message}</h4>
@@ -446,9 +445,9 @@ export const App: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex justify-between items-center">
           <div className="flex items-center gap-3">
             <div className="flex items-center">
-              <img 
-                src="logo2.png" 
-                alt="Logo" 
+              <img
+                src="logo2.png"
+                alt="Logo"
                 className="h-10 w-auto object-contain"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
@@ -462,14 +461,14 @@ export const App: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-4">
-             <OnlineUsers currentUser={currentUser} />
-             <div className="hidden md:flex flex-col text-right">
-                <span className="text-[11px] font-black text-slate-900 uppercase leading-none">{currentUser.username}</span>
-                <span className="text-[9px] font-black text-red-500 uppercase tracking-widest mt-0.5">{currentUser.role}</span>
-             </div>
-             <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-600 rounded-xl transition-all">
-               <LogOut size={20} />
-             </button>
+            <OnlineUsers currentUser={currentUser} />
+            <div className="hidden md:flex flex-col text-right">
+              <span className="text-[11px] font-black text-slate-900 uppercase leading-none">{currentUser.username}</span>
+              <span className="text-[9px] font-black text-red-500 uppercase tracking-widest mt-0.5">{currentUser.role}</span>
+            </div>
+            <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-600 rounded-xl transition-all">
+              <LogOut size={20} />
+            </button>
           </div>
         </div>
         <nav className="max-w-7xl mx-auto px-4 overflow-x-auto no-scrollbar hidden md:block border-t border-slate-50">
