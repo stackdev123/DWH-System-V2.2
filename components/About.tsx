@@ -38,9 +38,10 @@ const About: React.FC = () => {
   const updateLogs = [
     {
       version: "v2.1.4",
-      date: "7 September 2026",
+      date: "11 September 2026",
       items: [
-        "Penambahan fitur Projection Stock"
+        "Penambahan fitur Projection Stock",
+        "Penambahan opsi tema gelap (Dark Mode) pada menu Pengaturan untuk area gudang minim pencahayaan"
       ]
     },
     {

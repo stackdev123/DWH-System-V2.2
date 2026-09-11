@@ -1,8 +1,156 @@
-
 /* Base styles for the application */
 body {
   margin: 0;
   -font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* ==========================================================
+   TEMA GELAP (DARK MODE) - KHUSUS AREA GUDANG PENCAHAYAAN MINIM
+   ========================================================== */
+html.dark {
+  color-scheme: dark;
+  background-color: #0b0f19;
+}
+
+html.dark body {
+  background-color: #0b0f19;
+  color: #f1f5f9;
+}
+
+/* Penyesuaian container dan kartu utama di mode gelap */
+html.dark .bg-slate-50 {
+  background-color: #0b0f19 !important;
+}
+
+html.dark .bg-white {
+  background-color: #131b2e !important;
+}
+
+html.dark .bg-slate-100 {
+  background-color: #1e293b !important;
+}
+
+html.dark .bg-slate-100\/50,
+html.dark .bg-slate-100\/30 {
+  background-color: rgba(30, 41, 59, 0.45) !important;
+}
+
+/* Border dan garis pemisah */
+html.dark .border-slate-200 {
+  border-color: #243048 !important;
+}
+
+html.dark .border-slate-100 {
+  border-color: #1b263b !important;
+}
+
+html.dark .border-slate-50 {
+  border-color: #162033 !important;
+}
+
+html.dark .divide-slate-100>*+* {
+  border-color: #1e293b !important;
+}
+
+html.dark .divide-slate-200>*+* {
+  border-color: #243048 !important;
+}
+
+/* Tipografi di mode gelap */
+html.dark .text-slate-900 {
+  color: #f8fafc !important;
+}
+
+html.dark .text-slate-800 {
+  color: #e2e8f0 !important;
+}
+
+html.dark .text-slate-700 {
+  color: #cbd5e1 !important;
+}
+
+html.dark .text-slate-600 {
+  color: #94a3b8 !important;
+}
+
+html.dark .text-slate-500 {
+  color: #94a3b8 !important;
+}
+
+html.dark .text-slate-400 {
+  color: #64748b !important;
+}
+
+/* Input form, search box, select dropdown, dan textarea */
+html.dark input:not([type="checkbox"]):not([type="radio"]),
+html.dark select,
+html.dark textarea {
+  background-color: #1a233a !important;
+  color: #f8fafc !important;
+  border-color: #2e3d5b !important;
+}
+
+html.dark input:focus,
+html.dark select:focus,
+html.dark textarea:focus {
+  border-color: #ef4444 !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #64748b !important;
+}
+
+/* Alert dan badge status lembut di mode gelap */
+html.dark .bg-red-50,
+html.dark .bg-red-50\/60 {
+  background-color: rgba(185, 28, 28, 0.18) !important;
+  border-color: rgba(239, 68, 68, 0.35) !important;
+}
+
+html.dark .bg-amber-50,
+html.dark .bg-amber-50\/60 {
+  background-color: rgba(180, 83, 9, 0.18) !important;
+  border-color: rgba(245, 158, 11, 0.35) !important;
+}
+
+html.dark .bg-blue-50,
+html.dark .bg-blue-50\/60,
+html.dark .bg-blue-50\/20 {
+  background-color: rgba(30, 58, 138, 0.22) !important;
+  border-color: rgba(59, 130, 246, 0.35) !important;
+}
+
+html.dark .bg-emerald-50,
+html.dark .bg-emerald-50\/30 {
+  background-color: rgba(6, 78, 59, 0.22) !important;
+  border-color: rgba(16, 185, 129, 0.35) !important;
+}
+
+html.dark .bg-purple-50 {
+  background-color: rgba(88, 28, 135, 0.22) !important;
+  border-color: rgba(168, 85, 247, 0.35) !important;
+}
+
+/* Hover baris tabel dan tombol */
+html.dark .hover\:bg-slate-50\/80:hover,
+html.dark .hover\:bg-slate-50:hover,
+html.dark .hover\:bg-slate-100:hover {
+  background-color: #1e293b !important;
+}
+
+/* Scrollbar di mode gelap */
+html.dark .custom-scrollbar::-webkit-scrollbar-track {
+  background: #0b0f19;
+}
+
+html.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #243048;
+}
+
+html.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #334155;
 }

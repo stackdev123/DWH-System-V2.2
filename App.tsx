@@ -10,6 +10,7 @@ import LabelGenerator from './components/LabelGenerator.tsx';
 import Dashboard from './components/Dashboard.tsx';
 import SimpleInventoryModule from './components/SimpleInventoryModule.tsx';
 import OnlineUsers from './components/OnlineUsers.tsx';
+import SettingsComponent, { ThemeMode } from './components/Settings.tsx';
 import {
   ArrowLeftRight,
   Package,
@@ -20,6 +21,9 @@ import {
   Tag,
   LayoutDashboard,
   Settings,
+  Sliders,
+  Moon,
+  Sun,
   Briefcase,
   AlertOctagon,
   AlertTriangle,
@@ -55,6 +59,25 @@ export const App: React.FC = () => {
       console.error("Failed to load session", e);
     }
     return null;
+  });
+
+  // Manajemen Tema (Light / Dark / System)
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    try {
+      return (localStorage.getItem('bsi_dwh_theme') as ThemeMode) || 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  // Preferensi Audio Alert
+  const [audioAlertEnabled, setAudioAlertEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('bsi_dwh_audio_alert');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
   });
 
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -95,7 +118,59 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleToggleAudioAlert = (enabled: boolean) => {
+    setAudioAlertEnabled(enabled);
+    try {
+      localStorage.setItem('bsi_dwh_audio_alert', String(enabled));
+    } catch (e) { }
+  };
+
+  const handleThemeChange = (newTheme: ThemeMode) => {
+    setTheme(newTheme);
+    try {
+      localStorage.setItem('bsi_dwh_theme', newTheme);
+      const isDark = newTheme === 'dark' || (newTheme === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+        document.documentElement.style.colorScheme = 'dark';
+      } else {
+        document.documentElement.classList.remove('dark');
+        document.documentElement.style.colorScheme = 'light';
+      }
+    } catch (e) {
+      console.error("Failed to apply theme", e);
+    }
+  };
+
+  // Sinkronisasi tema aktif ke elemen root dokumen
+  useEffect(() => {
+    const applyCurrentTheme = () => {
+      const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+        document.documentElement.style.colorScheme = 'dark';
+      } else {
+        document.documentElement.classList.remove('dark');
+        document.documentElement.style.colorScheme = 'light';
+      }
+    };
+
+    applyCurrentTheme();
+
+    if (window.matchMedia) {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const handleChange = () => {
+        if (theme === 'system') {
+          applyCurrentTheme();
+        }
+      };
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+  }, [theme]);
+
   const playAlertSound = (type: string) => {
+    if (!audioAlertEnabled) return;
     try {
       const AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
       if (!AudioContext) return;
@@ -117,6 +192,10 @@ export const App: React.FC = () => {
         osc.stop(ctx.currentTime + 0.1);
       }
     } catch (e) { }
+  };
+
+  const handleTestAudio = () => {
+    playAlertSound('CRITICAL');
   };
 
   const loadAllData = useCallback(async (silent = false) => {
@@ -460,13 +539,38 @@ export const App: React.FC = () => {
               <span className="text-[8px] md:text-[9px] font-black text-red-600 uppercase tracking-widest mt-1">Bounty Segar Indonesia</span>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 md:gap-3">
             <OnlineUsers currentUser={currentUser} />
+
+            {/* Tombol Cepat Mode Gelap / Terang (Dark / Light) */}
+            <button
+              onClick={() => handleThemeChange(theme === 'dark' ? 'light' : 'dark')}
+              title={theme === 'dark' ? 'Beralih ke Mode Terang' : 'Beralih ke Mode Gelap (Gudang Minim Cahaya)'}
+              className={`p-2 rounded-xl border transition-all flex items-center justify-center ${theme === 'dark'
+                  ? 'bg-slate-800 text-amber-400 border-slate-700 hover:bg-slate-700 shadow-sm'
+                  : 'bg-slate-100 text-slate-600 border-slate-200 hover:text-red-600 hover:bg-slate-200'
+                }`}
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+
+            {/* Tombol Menu Pengaturan */}
+            <button
+              onClick={() => setActiveTab('settings')}
+              title="Menu Pengaturan"
+              className={`p-2 rounded-xl transition-all border ${activeTab === 'settings'
+                  ? 'bg-red-50 text-red-600 border-red-200'
+                  : 'text-slate-400 border-transparent hover:text-slate-700 hover:bg-slate-100'
+                }`}
+            >
+              <Sliders size={18} />
+            </button>
+
             <div className="hidden md:flex flex-col text-right">
               <span className="text-[11px] font-black text-slate-900 uppercase leading-none">{currentUser.username}</span>
               <span className="text-[9px] font-black text-red-500 uppercase tracking-widest mt-0.5">{currentUser.role}</span>
             </div>
-            <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-600 rounded-xl transition-all">
+            <button onClick={handleLogout} className="p-2 text-slate-400 hover:text-red-600 rounded-xl transition-all" title="Keluar">
               <LogOut size={20} />
             </button>
           </div>
@@ -496,6 +600,16 @@ export const App: React.FC = () => {
             {activeTab === 'mt' && <SimpleInventoryModule module="MT" currentUser={currentUser} />}
             {activeTab === 'hrga' && <SimpleInventoryModule module="GA" currentUser={currentUser} />}
             {activeTab === 'about' && <About />}
+            {activeTab === 'settings' && (
+              <SettingsComponent
+                currentUser={currentUser}
+                theme={theme}
+                onThemeChange={handleThemeChange}
+                audioAlertEnabled={audioAlertEnabled}
+                onToggleAudioAlert={handleToggleAudioAlert}
+                onTestAudio={handleTestAudio}
+              />
+            )}
           </div>
         )}
       </main>
