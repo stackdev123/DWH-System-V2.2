@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import { LogEntry, Product, StockItem, User, ItemStatus } from '../types.ts';
 import {
   Search, Calendar, Tag, FileText, FileSpreadsheet,
@@ -104,6 +104,53 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
 
   const filterStartTs = useMemo(() => new Date(startDate).setHours(0, 0, 0, 0), [startDate]);
   const filterEndTs = useMemo(() => new Date(endDate).setHours(23, 59, 59, 999), [endDate]);
+
+  const stockMap = useMemo(() => {
+    const map = new Map<string, StockItem>();
+    stock.forEach(s => {
+      if (s && s.uniqueId) {
+        map.set(s.uniqueId.trim().toLowerCase(), s);
+      }
+    });
+    return map;
+  }, [stock]);
+
+  const getItem = useCallback((stockItemId?: string): StockItem | undefined => {
+    if (!stockItemId) return undefined;
+    const cleanId = String(stockItemId).trim().toLowerCase();
+    const found = stockMap.get(cleanId);
+    if (found) return found;
+
+    // Fallback: jika item fisik sudah terhapus/keluar tapi unique_id memiliki format standar:
+    // Contoh: CMI001-080126DPF69-20260108-NOEXP-V68P
+    const parts = stockItemId.split('-');
+    if (parts.length >= 4) {
+      const batchCode = parts[1] || '-';
+      const arrRaw = parts[2];
+      let arrivalDate = arrRaw;
+      if (arrRaw && arrRaw.length === 8 && /^\d{8}$/.test(arrRaw)) {
+        arrivalDate = `${arrRaw.slice(0, 4)}-${arrRaw.slice(4, 6)}-${arrRaw.slice(6, 8)}`;
+      }
+      const expRaw = parts[3];
+      let expiryDate = expRaw;
+      if (expRaw && expRaw.length === 8 && /^\d{8}$/.test(expRaw)) {
+        expiryDate = `${expRaw.slice(0, 4)}-${expRaw.slice(4, 6)}-${expRaw.slice(6, 8)}`;
+      }
+      return {
+        uniqueId: stockItemId,
+        productId: parts[0],
+        productName: '',
+        batchCode,
+        arrivalDate,
+        expiryDate: expiryDate === 'NOEXP' ? '' : expiryDate,
+        supplier: '',
+        status: ItemStatus.OUTBOUND,
+        createdAt: 0,
+        quantity: 0
+      };
+    }
+    return undefined;
+  }, [stockMap]);
 
   const productNameToIdMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -230,16 +277,23 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
   };
 
   const downloadBukuMutasiExcel = () => {
-    const data = filteredLogs.map(l => ({
-      'Waktu': formatDateTimeFull(l.timestamp),
-      'Tipe': l.type,
-      'Barang': l.productName,
-      'Qty': Math.abs(Number(l.quantityChange || 0)),
-      'Unit': products.find(p => p.name === l.productName)?.unit || '',
-      'Penerima/Catatan': l.recipient || l.note || '-',
-      'User': l.user || 'SYS',
-      'Batch ID': l.stockItemId
-    }));
+    const data = filteredLogs.map(l => {
+      const item = getItem(l.stockItemId);
+      return {
+        'Waktu': formatDateTimeFull(l.timestamp),
+        'Tipe': l.type,
+        'Barang': l.productName,
+        'Qty': Math.abs(Number(l.quantityChange || 0)),
+        'Unit': products.find(p => p.name === l.productName)?.unit || '',
+        'Batch': item?.batchCode || l.stockItemId || '-',
+        'Supplier': item?.supplier || '-',
+        'Kedatangan': item?.arrivalDate ? formatDateReadable(item.arrivalDate) : '-',
+        'Expired': item?.expiryDate && item.expiryDate !== '-' && item.expiryDate !== 'NOEXP' ? formatDateReadable(item.expiryDate) : '-',
+        'Penerima/Catatan': l.recipient || l.note || '-',
+        'User': l.user || 'SYS',
+        'Batch ID': l.stockItemId
+      };
+    });
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Buku Mutasi");
@@ -358,7 +412,7 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
         stockCardData?.mutations.forEach((log, idx) => {
           if (yPos > pageHeight - 15) { pdf.addPage(); yPos = margin; drawPDFHeader(`KARTU STOK ${prodName.toUpperCase()}`, `Periode: ${startDate} s/d ${endDate}`, cols, widths); }
           if (idx % 2 === 1) { pdf.setFillColor(248, 250, 252); pdf.rect(margin, yPos, contentWidth, 7, 'F'); }
-          const item = stock.find(s => s.uniqueId === log.stockItemId);
+          const item = getItem(log.stockItemId);
           pdf.setFont('helvetica', 'normal'); pdf.setFontSize(6);
           let x = margin;
           pdf.text(formatDateTimeFull(log.timestamp), x + 1, yPos + 4.5); x += widths[0];
@@ -675,7 +729,7 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
                             <td className="px-4 py-3 border border-slate-200 text-right bg-blue-50/30 font-black">{stockCardData.openingBalance.toLocaleString()}</td>
                           </tr>
                           {stockCardData.mutations.map((log) => {
-                            const item = stock.find(s => s.uniqueId === log.stockItemId);
+                            const item = getItem(log.stockItemId);
                             return (
                               <tr key={log.id} className="hover:bg-slate-50/50">
                                 <td className="px-4 py-3 border border-slate-200 text-slate-500">{formatDateTimeFull(log.timestamp)}</td>
@@ -704,7 +758,7 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
                     <div className="md:hidden space-y-3">
                       <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 flex justify-between items-center"><span className="text-[10px] font-black text-blue-600 uppercase">Saldo Awal s/d {startDate}</span><span className="text-[14px] font-black text-slate-900">{stockCardData.openingBalance.toLocaleString()}</span></div>
                       {stockCardData.mutations.map((log) => {
-                        const item = stock.find(s => s.uniqueId === log.stockItemId);
+                        const item = getItem(log.stockItemId);
                         return (
                           <div key={log.id} className="bg-white p-4 rounded-[1.5rem] border border-slate-200 shadow-sm space-y-3">
                             <div className="flex justify-between items-center">
@@ -778,7 +832,7 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
               </thead>
               <tbody className="divide-y divide-slate-100 font-bold">
                 {filteredLogs.map(log => {
-                  const item = stock.find(s => s.uniqueId === log.stockItemId);
+                  const item = getItem(log.stockItemId);
                   return (
                     <tr key={log.id} className="hover:bg-slate-50/50">
                       <td className="px-6 py-4 font-bold text-slate-400 whitespace-nowrap">{formatDateTimeFull(log.timestamp)}</td>
@@ -827,7 +881,7 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
           </div>
           <div className="md:hidden divide-y divide-slate-100">
             {filteredLogs.map((log) => {
-              const item = stock.find(s => s.uniqueId === log.stockItemId);
+              const item = getItem(log.stockItemId);
               return (
                 <div key={log.id} className="p-5 flex flex-col gap-3">
                   <div className="flex justify-between items-start">

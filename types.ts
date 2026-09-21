@@ -41,7 +41,7 @@ export interface InventorySummary {
 }
 
 export interface StockItem {
-  id?: number;
+  id?: number | string;
   uniqueId: string;
   productId: string;
   productName: string;

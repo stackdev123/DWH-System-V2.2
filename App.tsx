@@ -81,10 +81,10 @@ export const App: React.FC = () => {
   });
 
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [products, setProducts] = useState<Product[]>([]);
-  const [stock, setStock] = useState<StockItem[]>([]);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [products, setProducts] = useState<Product[]>(() => db.getCachedProducts());
+  const [stock, setStock] = useState<StockItem[]>(() => db.getCachedStock());
+  const [logs, setLogs] = useState<LogEntry[]>(() => db.getCachedLogs());
+  const [isLoading, setIsLoading] = useState(() => db.getCachedProducts().length === 0);
   const [notifications, setNotifications] = useState<StockNotification[]>([]);
 
   const prevStocksRef = useRef<Record<string, number>>({});
@@ -198,13 +198,13 @@ export const App: React.FC = () => {
     playAlertSound('CRITICAL');
   };
 
-  const loadAllData = useCallback(async (silent = false) => {
-    if (!silent) setIsLoading(true);
+  const loadAllData = useCallback(async (silent = false, forceFresh = false) => {
+    if (!silent && products.length === 0) setIsLoading(true);
     try {
       const [p, s, l] = await Promise.all([
-        db.getProducts(),
-        db.getAllStock(),
-        db.getAllLogs()
+        db.getProducts(forceFresh),
+        db.getAllStock(forceFresh),
+        db.getAllLogs(forceFresh)
       ]);
 
       const now = new Date();
@@ -309,7 +309,7 @@ export const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [products.length]);
 
   useEffect(() => {
     if (currentUser) {
@@ -324,26 +324,63 @@ export const App: React.FC = () => {
 
       loadAllData();
 
+      let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+      const scheduleDebouncedRefresh = () => {
+        if (refreshTimeout) clearTimeout(refreshTimeout);
+        refreshTimeout = setTimeout(() => {
+          if (document.visibilityState === 'visible') {
+            loadAllData(true);
+          }
+        }, 1500); // Debounce 1.5 detik agar multiple batch rows tidak menyebabkan multiple sync
+      };
+
       const channel = supabase
         .channel('schema-db-changes')
         .on(
           'postgres_changes',
           { event: '*', schema: 'public' },
-          () => {
-            loadAllData(true);
+          (payload) => {
+            const table = payload.table;
+            if (table === 'products') {
+              db.invalidateProductsCache();
+              scheduleDebouncedRefresh();
+            } else if (table === 'stock_items') {
+              db.invalidateStockCache();
+              scheduleDebouncedRefresh();
+            } else if (table === 'logs') {
+              if (payload.eventType === 'DELETE' || payload.eventType === 'UPDATE') {
+                db.invalidateLogsCache();
+              }
+              scheduleDebouncedRefresh();
+            }
           }
         )
         .subscribe();
 
+      // Interval fallback efisien: 120 detik (2 menit)
+      // Realtime push websocket tetap menerima update seketika tanpa perlu polling boros
       const syncInterval = setInterval(() => {
         if (document.visibilityState === 'visible') {
           loadAllData(true);
         }
-      }, 15000);
+      }, 120000);
+
+      // Hanya sinkronisasi jika tab browser aktif/fokus
+      const handleVisibilityOrFocus = () => {
+        if (document.visibilityState === 'visible') {
+          scheduleDebouncedRefresh();
+        }
+      };
+
+      window.addEventListener('focus', handleVisibilityOrFocus);
+      document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
       return () => {
         supabase.removeChannel(channel);
         clearInterval(syncInterval);
+        if (refreshTimeout) clearTimeout(refreshTimeout);
+        window.removeEventListener('focus', handleVisibilityOrFocus);
+        document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       };
     }
   }, [currentUser, loadAllData]);
@@ -592,11 +629,11 @@ export const App: React.FC = () => {
           </div>
         ) : (
           <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-            {activeTab === 'dashboard' && <Dashboard products={products} stock={stock} logs={logs} currentUser={currentUser} onRefresh={() => loadAllData(true)} />}
-            {activeTab === 'inventory' && <Inventory products={products} inventory={stock} logs={logs} currentUser={currentUser} onAdjust={handleAdjustment} onBulkAdjust={handleBulkAdjust} onRefresh={() => loadAllData(true)} />}
+            {activeTab === 'dashboard' && <Dashboard products={products} stock={stock} logs={logs} currentUser={currentUser} onRefresh={() => loadAllData(true, true)} />}
+            {activeTab === 'inventory' && <Inventory products={products} inventory={stock} logs={logs} currentUser={currentUser} onAdjust={handleAdjustment} onBulkAdjust={handleBulkAdjust} onRefresh={() => loadAllData(true, true)} />}
             {activeTab === 'sticker' && <LabelGenerator products={products} stock={stock} onAddStock={handleRegisterStock} />}
-            {activeTab === 'transactions' && <Transactions products={products} stock={stock} onInbound={handleInbound} onOutbound={handleOutbound} onRefresh={() => loadAllData(true)} />}
-            {activeTab === 'history' && <History logs={logs} products={products} stock={stock} currentUser={currentUser} onRefresh={() => loadAllData(true)} onAdjust={handleAdjustment} />}
+            {activeTab === 'transactions' && <Transactions products={products} stock={stock} onInbound={handleInbound} onOutbound={handleOutbound} onRefresh={() => loadAllData(true, true)} />}
+            {activeTab === 'history' && <History logs={logs} products={products} stock={stock} currentUser={currentUser} onRefresh={() => loadAllData(true, true)} onAdjust={handleAdjustment} />}
             {activeTab === 'mt' && <SimpleInventoryModule module="MT" currentUser={currentUser} />}
             {activeTab === 'hrga' && <SimpleInventoryModule module="GA" currentUser={currentUser} />}
             {activeTab === 'about' && <About />}

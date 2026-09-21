@@ -37,8 +37,16 @@ const About: React.FC = () => {
 
   const updateLogs = [
     {
+      version: "v2.1.5",
+      date: "20 September 2026",
+      items: [
+        "Optimasi performa & efisiensi pemakaian kuota database (Egress Caching & Delta Sync)",
+        "Penyelarasan metadata batch (Supplier, Kedatangan, & Kedaluwarsa) pada laporan mutasi"
+      ]
+    },
+    {
       version: "v2.1.4",
-      date: "11 September 2026",
+      date: "7 September 2026",
       items: [
         "Penambahan fitur Projection Stock",
         "Penambahan opsi tema gelap (Dark Mode) pada menu Pengaturan untuk area gudang minim pencahayaan"
@@ -108,7 +116,7 @@ const About: React.FC = () => {
             <Info size={44} />
           </div>
           <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">Dry Warehouse System</h1>
-          <p className="text-xs font-black text-red-600 uppercase tracking-[0.2em] mt-3 bg-red-50 px-6 py-1.5 rounded-full inline-block border border-red-100">Rilis v2.1.4</p>
+          <p className="text-xs font-black text-red-600 uppercase tracking-[0.2em] mt-3 bg-red-50 px-6 py-1.5 rounded-full inline-block border border-red-100">Rilis v2.1.5</p>
           <div className="mt-8 max-w-2xl mx-auto text-slate-500 font-bold text-sm leading-relaxed uppercase tracking-wider">
             Sistem manajemen gudang modern yang dioptimalkan untuk performa, akurasi stok, dan kemudahan operasional BOUNTY SEGAR INDONESIA.
           </div>
