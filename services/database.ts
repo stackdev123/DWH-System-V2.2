@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { StockItem, LogEntry, Product, InventorySummary, User, ItemStatus, OpnameRequest, SimpleItem, SimpleTransaction } from '../types.ts';
+import { idbStorage } from './indexedDb.ts';
 
 const SUPABASE_URL = "https://gkivokddqirabsqexdap.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_UMe4xlyFFKTvKJairJCLEQ_mVnPw59Z";
@@ -8,11 +9,13 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const PROJECT_ID = SUPABASE_URL.split('//')[1]?.split('.')[0] || 'default';
 
-// --- IN-MEMORY & LOCALSTORAGE CACHE LAYER TO REDUCE EGRESS BY >90% ---
+// --- HYBRID INDEXEDDB & IN-MEMORY CACHE LAYER (REDUCES SUPABASE EGRESS BY UP TO 99.9%) ---
 const CACHE_KEYS = {
   PRODUCTS: `bsi_dwh_cache_products_${PROJECT_ID}`,
   STOCK: `bsi_dwh_cache_stock_${PROJECT_ID}`,
-  LOGS: `bsi_dwh_cache_logs_${PROJECT_ID}`
+  LOGS: `bsi_dwh_cache_logs_${PROJECT_ID}`,
+  SIMPLE_ITEMS: `bsi_dwh_cache_s_items_${PROJECT_ID}`,
+  SIMPLE_TX: `bsi_dwh_cache_s_tx_${PROJECT_ID}`
 };
 
 function safeGetStorage<T>(key: string, fallback: T): T {
@@ -31,6 +34,7 @@ function safeSetStorage(key: string, val: any): void {
   } catch { }
 }
 
+// Initial synchronous fallback from localStorage (fast boot)
 let cachedProducts: Product[] = safeGetStorage<Product[]>(CACHE_KEYS.PRODUCTS, []);
 let lastProductsFetch = 0;
 let productsCacheDirty = cachedProducts.length === 0;
@@ -43,9 +47,44 @@ let cachedLogs: LogEntry[] = safeGetStorage<LogEntry[]>(CACHE_KEYS.LOGS, []);
 let lastLogsFetch = 0;
 let logsCacheDirty = cachedLogs.length === 0;
 
-// Cache untuk modul MT/GA
+// Cache untuk modul MT/GA/HR
 const simpleItemsCache: Record<string, { data: SimpleItem[], timestamp: number }> = {};
 const simpleTxCache: Record<string, { data: SimpleTransaction[], timestamp: number }> = {};
+
+// Asynchronous background hydration from IndexedDB (handles tens of thousands of rows without 5MB quota cap)
+let idbHydrationPromise: Promise<void> | null = null;
+function ensureIdbReady(): Promise<void> {
+  if (!idbHydrationPromise) {
+    idbHydrationPromise = (async () => {
+      try {
+        const [p, s, l] = await Promise.all([
+          idbStorage.get<Product[]>(CACHE_KEYS.PRODUCTS, cachedProducts),
+          idbStorage.get<StockItem[]>(CACHE_KEYS.STOCK, cachedStock),
+          idbStorage.get<LogEntry[]>(CACHE_KEYS.LOGS, cachedLogs)
+        ]);
+
+        if (Array.isArray(p) && p.length > 0) {
+          cachedProducts = p;
+          productsCacheDirty = false;
+        }
+        if (Array.isArray(s) && s.length > 0) {
+          cachedStock = s;
+          stockCacheDirty = false;
+        }
+        if (Array.isArray(l) && l.length > 0) {
+          cachedLogs = l;
+          logsCacheDirty = false;
+        }
+      } catch (err) {
+        console.warn("IndexedDB hydration error, continuing with memory cache:", err);
+      }
+    })();
+  }
+  return idbHydrationPromise;
+}
+
+// Immediately trigger hydration on file load
+ensureIdbReady();
 
 export const db = {
   getCachedProducts: (): Product[] => cachedProducts,
@@ -115,29 +154,33 @@ export const db = {
   },
 
   getProducts: async (forceFresh = false): Promise<Product[]> => {
+    await ensureIdbReady();
     const now = Date.now();
-    if (!forceFresh && !productsCacheDirty && cachedProducts.length > 0 && (now - lastProductsFetch < 60000)) {
+    // Cache TTL 3 menit jika tidak dirty/forced (realtime websocket menginvalidaasi otomatis jika ada update)
+    if (!forceFresh && !productsCacheDirty && cachedProducts.length > 0 && (now - lastProductsFetch < 180000)) {
       return cachedProducts;
     }
 
     try {
-      let allData: any[] = [];
-      let page = 0;
+      const { count } = await supabase.from('products').select('id', { count: 'exact', head: true });
+      const total = count || 0;
       const pageSize = 1000;
+      const numPages = Math.max(1, Math.ceil(total / pageSize));
 
-      while (true) {
-        const { data, error } = await supabase
-          .from('products')
-          .select('id, name, category, unit, initial_stock, safety_stock, stock, is_active')
-          .order('id', { ascending: true })
-          .range(page * pageSize, (page + 1) * pageSize - 1);
-
-        if (error || !data || data.length === 0) break;
-        allData = [...allData, ...data];
-        if (data.length < pageSize) break;
-        page++;
-        if (page > 10) break; // Safety
+      const promises = [];
+      for (let i = 0; i < numPages; i++) {
+        promises.push(
+          supabase
+            .from('products')
+            .select('id, name, category, unit, initial_stock, safety_stock, stock, is_active')
+            .order('id', { ascending: true })
+            .range(i * pageSize, (i + 1) * pageSize - 1)
+            .then(r => r.data || [])
+        );
       }
+
+      const chunks = await Promise.all(promises);
+      const allData = chunks.flat();
 
       if (allData.length > 0) {
         const mapped = allData.map(item => ({
@@ -153,7 +196,8 @@ export const db = {
         cachedProducts = mapped;
         productsCacheDirty = false;
         lastProductsFetch = now;
-        safeSetStorage(CACHE_KEYS.PRODUCTS, mapped);
+        idbStorage.set(CACHE_KEYS.PRODUCTS, mapped);
+        safeSetStorage(CACHE_KEYS.PRODUCTS, mapped.slice(0, 500));
         return mapped;
       }
     } catch (e) {
@@ -232,7 +276,8 @@ export const db = {
 
     // Optimistic cache update
     cachedLogs = cachedLogs.filter(l => l.id !== log.id);
-    safeSetStorage(CACHE_KEYS.LOGS, cachedLogs);
+    idbStorage.set(CACHE_KEYS.LOGS, cachedLogs);
+    safeSetStorage(CACHE_KEYS.LOGS, cachedLogs.slice(0, 500));
 
     // 2. Reverse product balance
     await db.updateProductBalance(log.productName, -(log.quantityChange || 0));
@@ -258,7 +303,8 @@ export const db = {
 
     // Optimistic cache update
     cachedLogs = cachedLogs.map(l => l.id === log.id ? { ...l, quantityChange: newQtyChange, ...updates } : l);
-    safeSetStorage(CACHE_KEYS.LOGS, cachedLogs);
+    idbStorage.set(CACHE_KEYS.LOGS, cachedLogs);
+    safeSetStorage(CACHE_KEYS.LOGS, cachedLogs.slice(0, 500));
 
     if (diff !== 0) {
       // 2. Adjust product balance
@@ -308,29 +354,33 @@ export const db = {
   },
 
   getAllStock: async (forceFresh = false): Promise<StockItem[]> => {
+    await ensureIdbReady();
     const now = Date.now();
-    if (!forceFresh && !stockCacheDirty && cachedStock.length > 0 && (now - lastStockFetch < 60000)) {
+    // Cache valid for 3 minutes if not dirty/forced (realtime websocket already invalidates on changes)
+    if (!forceFresh && !stockCacheDirty && cachedStock.length > 0 && (now - lastStockFetch < 180000)) {
       return cachedStock;
     }
 
     try {
-      let allData: any[] = [];
-      let page = 0;
+      const { count } = await supabase.from('stock_items').select('unique_id', { count: 'exact', head: true });
+      const total = count || 0;
       const pageSize = 1000;
+      const numPages = Math.max(1, Math.ceil(total / pageSize));
 
-      while (true) {
-        const { data, error } = await supabase
-          .from('stock_items')
-          .select('unique_id, product_id, product_name, batch_code, arrival_date, expiry_date, supplier, status, created_at_ts, quantity, note')
-          .order('created_at_ts', { ascending: false })
-          .range(page * pageSize, (page + 1) * pageSize - 1);
-
-        if (error || !data || data.length === 0) break;
-        allData = [...allData, ...data];
-        if (data.length < pageSize) break;
-        page++;
-        if (page > 50) break; // Safety
+      const promises = [];
+      for (let i = 0; i < numPages; i++) {
+        promises.push(
+          supabase
+            .from('stock_items')
+            .select('unique_id, product_id, product_name, batch_code, arrival_date, expiry_date, supplier, status, created_at_ts, quantity, note')
+            .order('created_at_ts', { ascending: false })
+            .range(i * pageSize, (i + 1) * pageSize - 1)
+            .then(r => r.data || [])
+        );
       }
+
+      const chunks = await Promise.all(promises);
+      const allData = chunks.flat();
 
       if (allData.length > 0) {
         const mapped = allData.map(s => ({
@@ -350,7 +400,8 @@ export const db = {
         cachedStock = mapped;
         stockCacheDirty = false;
         lastStockFetch = now;
-        safeSetStorage(CACHE_KEYS.STOCK, mapped);
+        idbStorage.set(CACHE_KEYS.STOCK, mapped);
+        safeSetStorage(CACHE_KEYS.STOCK, mapped.slice(0, 500));
         return mapped;
       }
     } catch (e) {
@@ -362,71 +413,74 @@ export const db = {
   },
 
   getAllLogs: async (forceFresh = false): Promise<LogEntry[]> => {
+    await ensureIdbReady();
     const now = Date.now();
 
-    // DELTA INCREMENTAL SYNC: Jika ada cache dan tidak dipaksa re-fetch total,
-    // hanya minta row yang timestamp-nya LEBIH BARU dari data terakhir.
-    // Mengurangi egress hingga 99.9% saat data statis atau hanya bertambah beberapa baris.
-    if (!forceFresh && !logsCacheDirty && cachedLogs.length > 0) {
-      const maxTs = cachedLogs.reduce((max, l) => l.timestamp > max ? l.timestamp : max, 0);
-      try {
-        const { data: newLogs, error } = await supabase
+    try {
+      // 1. FAST DELTA SYNC (Penghematan Egress s/d 99.9%):
+      // Jika data sudah ada di local cache (IndexedDB/RAM) dan bukan forced refresh,
+      // kita HANYA mengambil mutasi baru yang timestamp-nya lebih besar dari data lokal.
+      if (!forceFresh && !logsCacheDirty && cachedLogs.length > 0) {
+        if (now - lastLogsFetch < 45000) {
+          return cachedLogs;
+        }
+
+        const maxTs = cachedLogs.reduce((max, l) => (Number(l.timestamp) || 0) > max ? Number(l.timestamp) : max, 0);
+        const { data: deltaLogs, error: deltaErr } = await supabase
           .from('logs')
           .select('id, type, stock_item_id, product_name, timestamp, recipient, note, quantity_change, user')
           .gt('timestamp', maxTs)
-          .order('timestamp', { ascending: false })
-          .limit(200);
+          .order('timestamp', { ascending: false });
 
-        if (!error) {
-          if (!newLogs || newLogs.length === 0) {
-            // Nol perubahan baru, gunakan cache lokal (0 egress untuk data historis)
-            lastLogsFetch = now;
+        if (!deltaErr && deltaLogs) {
+          lastLogsFetch = now;
+          if (deltaLogs.length === 0) {
+            // Egress hanya ~150 byte header HTTP tanpa payload baris data
             return cachedLogs;
           }
 
-          const mappedNew: LogEntry[] = newLogs.map(l => ({
+          const mappedDelta: LogEntry[] = deltaLogs.map(l => ({
             id: l.id,
             type: l.type,
             stockItemId: l.stock_item_id,
             productName: l.product_name,
-            timestamp: l.timestamp,
+            timestamp: Number(l.timestamp) || 0,
             recipient: l.recipient,
             note: l.note,
             quantityChange: Number(l.quantity_change) || 0,
             user: l.user
           }));
 
-          const newIdSet = new Set(mappedNew.map(l => l.id));
-          cachedLogs = [...mappedNew, ...cachedLogs.filter(l => !newIdSet.has(l.id))];
-          safeSetStorage(CACHE_KEYS.LOGS, cachedLogs.slice(0, 5000));
-          lastLogsFetch = now;
+          const idSet = new Set(mappedDelta.map(l => l.id));
+          cachedLogs = [...mappedDelta, ...cachedLogs.filter(l => !idSet.has(l.id))];
+          cachedLogs.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+          idbStorage.set(CACHE_KEYS.LOGS, cachedLogs);
+          safeSetStorage(CACHE_KEYS.LOGS, cachedLogs.slice(0, 500));
           return cachedLogs;
         }
-      } catch (e) {
-        console.warn("Incremental logs fetch warning, returning cached:", e);
-        return cachedLogs;
       }
-    }
 
-    // FULL FETCH dengan selective columns jika dipaksa atau cache kosong
-    try {
-      let allData: any[] = [];
-      let page = 0;
+      // 2. FULL PARALLEL MULTI-PAGE FETCH:
+      // Hanya dijalankan pada saat buka pertama kali jika cache benar-benar kosong, atau saat tombol 'Refresh' ditekan.
+      const { count } = await supabase.from('logs').select('id', { count: 'exact', head: true });
+      const total = count || 0;
       const pageSize = 1000;
+      const numPages = Math.max(1, Math.ceil(total / pageSize));
 
-      while (true) {
-        const { data, error } = await supabase
-          .from('logs')
-          .select('id, type, stock_item_id, product_name, timestamp, recipient, note, quantity_change, user')
-          .order('timestamp', { ascending: false })
-          .range(page * pageSize, (page + 1) * pageSize - 1);
-
-        if (error || !data || data.length === 0) break;
-        allData = [...allData, ...data];
-        if (data.length < pageSize) break;
-        page++;
-        if (page > 50) break; // Safety limit (50k logs)
+      const promises = [];
+      for (let i = 0; i < numPages; i++) {
+        promises.push(
+          supabase
+            .from('logs')
+            .select('id, type, stock_item_id, product_name, timestamp, recipient, note, quantity_change, user')
+            .order('timestamp', { ascending: false })
+            .range(i * pageSize, (i + 1) * pageSize - 1)
+            .then(r => r.data || [])
+        );
       }
+
+      const chunks = await Promise.all(promises);
+      const allData = chunks.flat();
 
       if (allData.length > 0) {
         const mapped = allData.map(l => ({
@@ -434,7 +488,7 @@ export const db = {
           type: l.type,
           stockItemId: l.stock_item_id,
           productName: l.product_name,
-          timestamp: l.timestamp,
+          timestamp: Number(l.timestamp) || 0,
           recipient: l.recipient,
           note: l.note,
           quantityChange: Number(l.quantity_change) || 0,
@@ -443,7 +497,8 @@ export const db = {
         cachedLogs = mapped;
         logsCacheDirty = false;
         lastLogsFetch = now;
-        safeSetStorage(CACHE_KEYS.LOGS, mapped.slice(0, 5000));
+        idbStorage.set(CACHE_KEYS.LOGS, mapped);
+        safeSetStorage(CACHE_KEYS.LOGS, mapped.slice(0, 500));
         return mapped;
       }
     } catch (e) {
@@ -543,7 +598,8 @@ export const db = {
 
     // Optimistic cache update
     cachedLogs = [...logs, ...cachedLogs];
-    safeSetStorage(CACHE_KEYS.LOGS, cachedLogs.slice(0, 5000));
+    idbStorage.set(CACHE_KEYS.LOGS, cachedLogs);
+    safeSetStorage(CACHE_KEYS.LOGS, cachedLogs.slice(0, 500));
 
     for (const log of logs) {
       if (log.quantityChange !== undefined && log.quantityChange !== 0) {
@@ -552,34 +608,47 @@ export const db = {
     }
   },
 
-  // --- MT & GA SPECIFIC FUNCTIONS (OPTIMIZED) ---
+  // --- MT & GA SPECIFIC FUNCTIONS (OPTIMIZED FOR ZERO-WASTE EGRESS) ---
 
   getSimpleItems: async (module: 'MT' | 'GA' | 'HR', forceFresh = false): Promise<SimpleItem[]> => {
+    await ensureIdbReady();
     const now = Date.now();
-    const cached = simpleItemsCache[module];
-    if (!forceFresh && cached && (now - cached.timestamp < 60000)) {
-      return cached.data;
+    const cacheKey = `${CACHE_KEYS.SIMPLE_ITEMS}_${module}`;
+
+    // Check in-memory cache
+    let cached = simpleItemsCache[module]?.data;
+    if (!cached || cached.length === 0) {
+      cached = await idbStorage.get<SimpleItem[]>(cacheKey, []);
+      if (cached && cached.length > 0) {
+        simpleItemsCache[module] = { data: cached, timestamp: now };
+      }
+    }
+
+    if (!forceFresh && cached && cached.length > 0 && (now - (simpleItemsCache[module]?.timestamp || 0) < 180000)) {
+      return cached;
     }
 
     try {
-      let allData: any[] = [];
-      let page = 0;
+      const { count } = await supabase.from('simple_master_items').select('id', { count: 'exact', head: true }).eq('module', module);
+      const total = count || 0;
       const pageSize = 1000;
+      const numPages = Math.max(1, Math.ceil(total / pageSize));
 
-      while (true) {
-        const { data, error } = await supabase
-          .from('simple_master_items')
-          .select('id, name, unit, module, initial_stock')
-          .eq('module', module)
-          .order('name', { ascending: true })
-          .range(page * pageSize, (page + 1) * pageSize - 1);
-
-        if (error || !data || data.length === 0) break;
-        allData = [...allData, ...data];
-        if (data.length < pageSize) break;
-        page++;
-        if (page > 10) break;
+      const promises = [];
+      for (let i = 0; i < numPages; i++) {
+        promises.push(
+          supabase
+            .from('simple_master_items')
+            .select('id, name, unit, module, initial_stock')
+            .eq('module', module)
+            .order('name', { ascending: true })
+            .range(i * pageSize, (i + 1) * pageSize - 1)
+            .then(r => r.data || [])
+        );
       }
+
+      const chunks = await Promise.all(promises);
+      const allData = chunks.flat();
 
       const mapped = allData.map(item => ({
         id: item.id,
@@ -589,43 +658,98 @@ export const db = {
         initialStock: Number(item.initial_stock) || 0
       }));
       simpleItemsCache[module] = { data: mapped, timestamp: now };
+      idbStorage.set(cacheKey, mapped);
       return mapped;
     } catch {
-      if (cached) return cached.data;
+      if (cached && cached.length > 0) return cached;
       return [];
     }
   },
 
   getSimpleTransactions: async (module: 'MT' | 'GA' | 'HR', forceFresh = false): Promise<SimpleTransaction[]> => {
+    await ensureIdbReady();
     const now = Date.now();
-    const cached = simpleTxCache[module];
-    if (!forceFresh && cached && (now - cached.timestamp < 60000)) {
-      return cached.data;
+    const cacheKey = `${CACHE_KEYS.SIMPLE_TX}_${module}`;
+
+    // Check memory then IndexedDB
+    let cached = simpleTxCache[module]?.data;
+    if (!cached || cached.length === 0) {
+      cached = await idbStorage.get<SimpleTransaction[]>(cacheKey, []);
+      if (cached && cached.length > 0) {
+        simpleTxCache[module] = { data: cached, timestamp: now };
+      }
+    }
+
+    // DELTA SYNC UNTUK SIMPLE TRANSACTIONS:
+    // Hanya ambil transaksi baru jika sudah ada data lokal
+    if (!forceFresh && cached && cached.length > 0) {
+      if (now - (simpleTxCache[module]?.timestamp || 0) < 45000) {
+        return cached;
+      }
+
+      const maxTs = cached.reduce((max, t) => (Number(t.timestamp) || 0) > max ? Number(t.timestamp) : max, 0);
+      const { data: delta, error: deltaErr } = await supabase
+        .from('simple_transactions')
+        .select('id, timestamp, type, item_name, quantity, unit, supplier, recipient, officer, note, module')
+        .eq('module', module)
+        .gt('timestamp', maxTs)
+        .order('timestamp', { ascending: false });
+
+      if (!deltaErr && delta) {
+        simpleTxCache[module] = { data: cached, timestamp: now };
+        if (delta.length === 0) {
+          // Zero egress!
+          return cached;
+        }
+
+        const mappedDelta: SimpleTransaction[] = delta.map(t => ({
+          id: t.id,
+          timestamp: Number(t.timestamp) || 0,
+          type: t.type,
+          itemName: t.item_name,
+          quantity: t.quantity,
+          unit: t.unit,
+          supplier: t.supplier,
+          recipient: t.recipient,
+          officer: t.officer,
+          note: t.note,
+          module: t.module
+        }));
+
+        const idSet = new Set(mappedDelta.map(d => d.id));
+        const merged = [...mappedDelta, ...cached.filter(c => !idSet.has(c.id))];
+        merged.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+        simpleTxCache[module] = { data: merged, timestamp: now };
+        idbStorage.set(cacheKey, merged);
+        return merged;
+      }
     }
 
     try {
-      let allData: any[] = [];
-      let page = 0;
+      const { count } = await supabase.from('simple_transactions').select('id', { count: 'exact', head: true }).eq('module', module);
+      const total = count || 0;
       const pageSize = 1000;
+      const numPages = Math.max(1, Math.ceil(total / pageSize));
 
-      while (true) {
-        const { data, error } = await supabase
-          .from('simple_transactions')
-          .select('id, timestamp, type, item_name, quantity, unit, supplier, recipient, officer, note, module')
-          .eq('module', module)
-          .order('timestamp', { ascending: false })
-          .range(page * pageSize, (page + 1) * pageSize - 1);
-
-        if (error || !data || data.length === 0) break;
-        allData = [...allData, ...data];
-        if (data.length < pageSize) break;
-        page++;
-        if (page > 50) break;
+      const promises = [];
+      for (let i = 0; i < numPages; i++) {
+        promises.push(
+          supabase
+            .from('simple_transactions')
+            .select('id, timestamp, type, item_name, quantity, unit, supplier, recipient, officer, note, module')
+            .eq('module', module)
+            .order('timestamp', { ascending: false })
+            .range(i * pageSize, (i + 1) * pageSize - 1)
+            .then(r => r.data || [])
+        );
       }
+
+      const chunks = await Promise.all(promises);
+      const allData = chunks.flat();
 
       const mapped = allData.map(t => ({
         id: t.id,
-        timestamp: t.timestamp,
+        timestamp: Number(t.timestamp) || 0,
         type: t.type,
         itemName: t.item_name,
         quantity: t.quantity,
@@ -637,9 +761,10 @@ export const db = {
         module: t.module
       }));
       simpleTxCache[module] = { data: mapped, timestamp: now };
+      idbStorage.set(cacheKey, mapped);
       return mapped;
     } catch {
-      if (cached) return cached.data;
+      if (cached && cached.length > 0) return cached;
       return [];
     }
   },
@@ -682,32 +807,58 @@ export const db = {
     if (error) throw error;
   },
 
-  getOpnameRequests: async (): Promise<OpnameRequest[]> => {
-    const { data, error } = await supabase
-      .from('opname_requests')
-      .select('id, product_id, product_name, batch_code, system_qty, physical_qty, variance, note, is_initial_adj, reference_date, submitted_by, submitted_at, status')
-      .order('submitted_at', { ascending: false })
-      .limit(1000);
+  getOpnameRequests: async (forceFresh = false): Promise<OpnameRequest[]> => {
+    const now = Date.now();
+    if (!forceFresh && (db as any)._cachedOpname && (now - (db as any)._lastOpnameFetch < 60000)) {
+      return (db as any)._cachedOpname;
+    }
 
-    if (error) return [];
-    return data.map(r => ({
-      id: r.id,
-      productId: r.product_id,
-      productName: r.product_name,
-      batchCode: r.batch_code,
-      systemQty: r.system_qty,
-      physicalQty: r.physical_qty,
-      variance: r.variance,
-      note: r.note,
-      isInitialStockAdjustment: r.is_initial_adj,
-      referenceDate: r.reference_date,
-      submittedBy: r.submitted_by,
-      submittedAt: r.submitted_at,
-      status: r.status
-    }));
+    try {
+      const { count } = await supabase.from('opname_requests').select('id', { count: 'exact', head: true });
+      const total = count || 0;
+      const pageSize = 1000;
+      const numPages = Math.max(1, Math.ceil(total / pageSize));
+
+      const promises = [];
+      for (let i = 0; i < numPages; i++) {
+        promises.push(
+          supabase
+            .from('opname_requests')
+            .select('id, product_id, product_name, batch_code, system_qty, physical_qty, variance, note, is_initial_adj, reference_date, submitted_by, submitted_at, status')
+            .order('submitted_at', { ascending: false })
+            .range(i * pageSize, (i + 1) * pageSize - 1)
+            .then(r => r.data || [])
+        );
+      }
+
+      const chunks = await Promise.all(promises);
+      const allData = chunks.flat();
+
+      const mapped = allData.map(r => ({
+        id: r.id,
+        productId: r.product_id,
+        productName: r.product_name,
+        batchCode: r.batch_code,
+        systemQty: r.system_qty,
+        physicalQty: r.physical_qty,
+        variance: r.variance,
+        note: r.note,
+        isInitialStockAdjustment: r.is_initial_adj,
+        referenceDate: r.reference_date,
+        submittedBy: r.submitted_by,
+        submittedAt: r.submitted_at,
+        status: r.status
+      }));
+      (db as any)._cachedOpname = mapped;
+      (db as any)._lastOpnameFetch = now;
+      return mapped;
+    } catch {
+      return (db as any)._cachedOpname || [];
+    }
   },
 
   submitOpnameRequest: async (request: Partial<OpnameRequest>): Promise<void> => {
+    (db as any)._lastOpnameFetch = 0;
     const payload = {
       product_id: request.productId,
       product_name: request.productName,
@@ -727,6 +878,7 @@ export const db = {
   },
 
   updateOpnameStatus: async (requestId: string, status: 'APPROVED' | 'REJECTED'): Promise<void> => {
+    (db as any)._lastOpnameFetch = 0;
     const { error } = await supabase
       .from('opname_requests')
       .update({ status })

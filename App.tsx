@@ -357,18 +357,23 @@ export const App: React.FC = () => {
         )
         .subscribe();
 
-      // Interval fallback efisien: 120 detik (2 menit)
-      // Realtime push websocket tetap menerima update seketika tanpa perlu polling boros
+      // Interval fallback efisien: 180 detik (3 menit)
+      // Realtime push websocket sudah menerima update seketika tanpa perlu polling boros
       const syncInterval = setInterval(() => {
         if (document.visibilityState === 'visible') {
           loadAllData(true);
         }
-      }, 120000);
+      }, 180000);
 
-      // Hanya sinkronisasi jika tab browser aktif/fokus
+      // Hanya sinkronisasi jika tab browser aktif/fokus dan minimal 60 detik sejak sync terakhir
+      let lastFocusSync = Date.now();
       const handleVisibilityOrFocus = () => {
         if (document.visibilityState === 'visible') {
-          scheduleDebouncedRefresh();
+          const now = Date.now();
+          if (now - lastFocusSync > 60000) {
+            lastFocusSync = now;
+            scheduleDebouncedRefresh();
+          }
         }
       };
 
