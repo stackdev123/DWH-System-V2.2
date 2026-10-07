@@ -19,7 +19,7 @@ export default defineConfig(({ mode }) => {
         // Tambahkan konfigurasi PWA di bawah ini
         VitePWA({
           registerType: 'autoUpdate',
-          includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+          includeAssets: ['favicon.ico', 'Bounty Segar Glossy Emblem.png'],
           manifest: {
             name: 'Dry Warehouse System BSI',
             short_name: 'DWH-BSI',
@@ -29,17 +29,17 @@ export default defineConfig(({ mode }) => {
             display: 'standalone',
             icons: [
               {
-                src: 'logo2.png',
+                src: 'Bounty Segar Glossy Emblem.png',
                 sizes: '192x192',
                 type: 'image/png'
               },
               {
-                src: 'logo2.png',
+                src: 'Bounty Segar Glossy Emblem.png',
                 sizes: '512x512',
                 type: 'image/png'
               },
               {
-                src: 'logo2.png',
+                src: 'Bounty Segar Glossy Emblem.png',
                 sizes: '512x512',
                 type: 'image/png',
                 purpose: 'any maskable'
