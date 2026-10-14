@@ -163,6 +163,16 @@ const SimpleInventoryModule: React.FC<SimpleInventoryModuleProps> = ({ module, c
 
   useEffect(() => { loadData(); }, [module, subModule]);
 
+  const [successToast, setSuccessToast] = useState<{ message: string; tx: SimpleTransaction } | null>(null);
+
+  useEffect(() => {
+    if (!successToast) return;
+    const timer = setTimeout(() => {
+      setSuccessToast(null);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [successToast]);
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isViewer || !form.name || form.qty <= 0) return;
@@ -172,8 +182,8 @@ const SimpleInventoryModule: React.FC<SimpleInventoryModuleProps> = ({ module, c
       const tx: SimpleTransaction = {
         timestamp: Date.now(),
         type: activeTab === 'in' ? 'IN' : 'OUT',
-        itemName: form.name.toUpperCase(),
-        quantity: form.qty,
+        itemName: form.name.toUpperCase().trim(),
+        quantity: Number(form.qty) || 0,
         unit: form.unit || 'Pcs',
         supplier: activeTab === 'in' ? form.supplier : undefined,
         recipient: activeTab === 'out' ? form.recipient : undefined,
@@ -181,10 +191,21 @@ const SimpleInventoryModule: React.FC<SimpleInventoryModuleProps> = ({ module, c
         note: form.note,
         module: targetModule
       };
-      await db.addSimpleTransaction(tx);
-      setForm({ name: '', qty: 0, unit: 'Pcs', supplier: '', recipient: '', note: '' });
-      await loadData();
-    } catch (err) { alert("Gagal simpan."); } finally { setIsLoading(false); }
+      const savedTx = await db.addSimpleTransaction(tx);
+      // Update local transactions state immediately so it renders without delay in both log and sidebar
+      setTransactions(prev => [savedTx, ...prev.filter(t => t.id !== savedTx.id)]);
+      setForm({ name: '', qty: 0, unit: form.unit || 'Pcs', supplier: '', recipient: '', note: '' });
+      setSuccessToast({
+        message: `Transaksi ${savedTx.itemName} (${savedTx.type === 'IN' ? 'Masuk' : 'Keluar'} ${savedTx.quantity} ${savedTx.unit}) berhasil dicatat!`,
+        tx: savedTx
+      });
+      await loadData(true);
+    } catch (err) {
+      console.error(err);
+      alert("Gagal simpan.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const filteredTransactions = useMemo(() => {
@@ -691,123 +712,152 @@ const SimpleInventoryModule: React.FC<SimpleInventoryModuleProps> = ({ module, c
             </div>
           ) : (
             !isViewer && (
-              <form onSubmit={handleSave} className="bg-white p-6 md:p-8 rounded-[2rem] border shadow-sm space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="md:col-span-2">
-                    <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">Nama Barang</label>
-                    <div className="relative">
-                      <Tag className={`absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 transition-colors ${currentAccentColor}`} size={18} />
-                      <input list={`items-${module}`} className="w-full h-14 p-4 pl-12 bg-slate-50 border border-slate-200 rounded-2xl font-black uppercase text-xs outline-none focus:ring-2 focus:ring-opacity-20 focus:ring-slate-400" placeholder="Ketik nama barang..." value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required />
-                      <datalist id={`items-${module}`}>{masterItems.map((i, idx) => <option key={idx} value={i.name} />)}</datalist>
+              <div className="space-y-4">
+                {successToast && (
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-2xl flex items-center justify-between gap-3 text-emerald-600 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Check size={18} className="shrink-0 text-emerald-600" />
+                      <span className="text-xs font-bold truncate">{successToast.message}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('log');
+                          setSuccessToast(null);
+                        }}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[10px] font-black uppercase shadow-sm transition-all active:scale-95"
+                      >
+                        Buka Log
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSuccessToast(null)}
+                        className="text-slate-400 hover:text-slate-600 p-1"
+                      >
+                        <X size={14} />
+                      </button>
                     </div>
                   </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest">Quantity & Satuan</label>
-                      {isKnownItem && (
-                        <span className="text-[9px] font-bold text-slate-400 flex items-center gap-1">
-                          <Lock size={10} /> Terkunci dari Master
-                        </span>
-                      )}
+                )}
+                <form onSubmit={handleSave} className="bg-white p-6 md:p-8 rounded-[2rem] border shadow-sm space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">Nama Barang</label>
+                      <div className="relative">
+                        <Tag className={`absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 transition-colors ${currentAccentColor}`} size={18} />
+                        <input list={`items-${module}`} className="w-full h-14 p-4 pl-12 bg-slate-50 border border-slate-200 rounded-2xl font-black uppercase text-xs outline-none focus:ring-2 focus:ring-opacity-20 focus:ring-slate-400" placeholder="Ketik nama barang..." value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required />
+                        <datalist id={`items-${module}`}>{masterItems.map((i, idx) => <option key={idx} value={i.name} />)}</datalist>
+                      </div>
                     </div>
-                    <div className="flex gap-2 h-14 items-center">
-                      <input
-                        type="number"
-                        step="0.01"
-                        placeholder="0"
-                        className="flex-1 min-w-0 h-14 p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-lg outline-none focus:ring-2 focus:ring-opacity-20 focus:ring-slate-400"
-                        value={form.qty || ''}
-                        onChange={e => setForm({ ...form, qty: parseFloat(e.target.value) || 0 })}
-                        required
-                      />
-                      <div className="relative shrink-0">
-                        <select
-                          value={form.unit || 'Pcs'}
-                          disabled={isKnownItem}
-                          onChange={e => {
-                            if (e.target.value === '__ADD_NEW__') {
-                              setShowAddUnitModal(true);
-                            } else {
-                              setForm({ ...form, unit: e.target.value });
-                            }
-                          }}
-                          className={`w-28 sm:w-32 h-14 pl-3.5 pr-8 border rounded-2xl font-black text-xs uppercase outline-none transition-all appearance-none cursor-pointer focus:ring-2 focus:ring-opacity-20 focus:ring-slate-400 ${isKnownItem
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest">Quantity & Satuan</label>
+                        {isKnownItem && (
+                          <span className="text-[9px] font-bold text-slate-400 flex items-center gap-1">
+                            <Lock size={10} /> Terkunci dari Master
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex gap-2 h-14 items-center">
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="0"
+                          className="flex-1 min-w-0 h-14 p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-lg outline-none focus:ring-2 focus:ring-opacity-20 focus:ring-slate-400"
+                          value={form.qty || ''}
+                          onChange={e => setForm({ ...form, qty: parseFloat(e.target.value) || 0 })}
+                          required
+                        />
+                        <div className="relative shrink-0">
+                          <select
+                            value={form.unit || 'Pcs'}
+                            disabled={isKnownItem}
+                            onChange={e => {
+                              if (e.target.value === '__ADD_NEW__') {
+                                setShowAddUnitModal(true);
+                              } else {
+                                setForm({ ...form, unit: e.target.value });
+                              }
+                            }}
+                            className={`w-28 sm:w-32 h-14 pl-3.5 pr-8 border rounded-2xl font-black text-xs uppercase outline-none transition-all appearance-none cursor-pointer focus:ring-2 focus:ring-opacity-20 focus:ring-slate-400 ${isKnownItem
                               ? 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed'
                               : 'bg-slate-50 border-slate-200 text-slate-900 hover:bg-slate-100/70'
-                            }`}
-                          title={isKnownItem ? 'Satuan otomatis terkunci berdasarkan data master barang' : 'Pilih satuan'}
-                          required
-                        >
-                          {availableUnits.map(u => (
-                            <option key={u} value={u} className="font-bold text-slate-900 py-1">
-                              {u}
-                            </option>
-                          ))}
-                          {!isKnownItem && (
-                            <option value="__ADD_NEW__" className="font-black text-emerald-600 bg-emerald-50">
-                              + Tambah Unit...
-                            </option>
-                          )}
-                        </select>
-                        <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 flex items-center">
-                          {isKnownItem ? <Lock size={14} className="text-slate-400" /> : <ChevronDown size={16} />}
+                              }`}
+                            title={isKnownItem ? 'Satuan otomatis terkunci berdasarkan data master barang' : 'Pilih satuan'}
+                            required
+                          >
+                            {availableUnits.map(u => (
+                              <option key={u} value={u} className="font-bold text-slate-900 py-1">
+                                {u}
+                              </option>
+                            ))}
+                            {!isKnownItem && (
+                              <option value="__ADD_NEW__" className="font-black text-emerald-600 bg-emerald-50">
+                                + Tambah Unit...
+                              </option>
+                            )}
+                          </select>
+                          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400 flex items-center">
+                            {isKnownItem ? <Lock size={14} className="text-slate-400" /> : <ChevronDown size={16} />}
+                          </div>
                         </div>
+                        {!isKnownItem && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewUnitName('');
+                              setAddUnitError('');
+                              setShowAddUnitModal(true);
+                            }}
+                            className="w-12 h-14 shrink-0 flex items-center justify-center bg-slate-50 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 text-slate-500 border border-slate-200 rounded-2xl transition-all shadow-sm active:scale-95"
+                            title="Tambah Satuan Baru"
+                          >
+                            <Plus size={18} />
+                          </button>
+                        )}
                       </div>
-                      {!isKnownItem && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNewUnitName('');
-                            setAddUnitError('');
-                            setShowAddUnitModal(true);
-                          }}
-                          className="w-12 h-14 shrink-0 flex items-center justify-center bg-slate-50 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-300 text-slate-500 border border-slate-200 rounded-2xl transition-all shadow-sm active:scale-95"
-                          title="Tambah Satuan Baru"
-                        >
-                          <Plus size={18} />
-                        </button>
-                      )}
                     </div>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">{activeTab === 'in' ? 'Supplier' : 'Penerima'}</label>
-                    <div className="relative">
-                      {activeTab === 'in' ? <Truck className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} /> : <UserCheck className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />}
-                      <input
-                        className="w-full h-14 p-4 pl-12 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-xs outline-none focus:ring-2 focus:ring-opacity-20 focus:ring-slate-400"
-                        placeholder="..."
-                        value={activeTab === 'in' ? form.supplier : form.recipient}
-                        onChange={e => setForm({ ...form, supplier: activeTab === 'in' ? e.target.value : '', recipient: activeTab === 'out' ? e.target.value : '' })}
-                        required
-                      />
-                    </div>
-                  </div>
-                  {activeTab === 'out' && (
-                    <div className="md:col-span-2">
-                      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">Keterangan</label>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">{activeTab === 'in' ? 'Supplier' : 'Penerima'}</label>
                       <div className="relative">
-                        <FileText className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                        {activeTab === 'in' ? <Truck className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} /> : <UserCheck className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />}
                         <input
-                          type="text"
                           className="w-full h-14 p-4 pl-12 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-xs outline-none focus:ring-2 focus:ring-opacity-20 focus:ring-slate-400"
-                          placeholder="Keterangan pengeluaran barang (keperluan, nomor SPK, lokasi, dsb)..."
-                          value={form.note}
-                          onChange={e => setForm({ ...form, note: e.target.value })}
+                          placeholder="..."
+                          value={activeTab === 'in' ? form.supplier : form.recipient}
+                          onChange={e => setForm({ ...form, supplier: activeTab === 'in' ? e.target.value : '', recipient: activeTab === 'out' ? e.target.value : '' })}
+                          required
                         />
                       </div>
                     </div>
-                  )}
-                </div>
-                <div className="pt-4 flex items-center justify-between bg-slate-50 p-4 rounded-2xl border-dashed border border-slate-200">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-slate-900 text-white rounded-xl flex items-center justify-center shadow-md"><UserIcon size={16} /></div>
-                    <span className="text-[10px] font-black uppercase text-slate-900">{currentUser.username}</span>
+                    {activeTab === 'out' && (
+                      <div className="md:col-span-2">
+                        <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">Keterangan</label>
+                        <div className="relative">
+                          <FileText className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                          <input
+                            type="text"
+                            className="w-full h-14 p-4 pl-12 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-xs outline-none focus:ring-2 focus:ring-opacity-20 focus:ring-slate-400"
+                            placeholder="Keterangan pengeluaran barang (keperluan, nomor SPK, lokasi, dsb)..."
+                            value={form.note}
+                            onChange={e => setForm({ ...form, note: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <button type="submit" disabled={isLoading} className={`px-10 py-4 ${activeTab === 'in' ? 'bg-emerald-600' : 'bg-red-600'} text-white rounded-xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all flex items-center gap-3`}>
-                    {isLoading ? <RefreshCw className="animate-spin" size={18} /> : <><Save size={18} /> SIMPAN DATA</>}
-                  </button>
-                </div>
-              </form>
+                  <div className="pt-4 flex items-center justify-between bg-slate-50 p-4 rounded-2xl border-dashed border border-slate-200">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-slate-900 text-white rounded-xl flex items-center justify-center shadow-md"><UserIcon size={16} /></div>
+                      <span className="text-[10px] font-black uppercase text-slate-900">{currentUser.username}</span>
+                    </div>
+                    <button type="submit" disabled={isLoading} className={`px-10 py-4 ${activeTab === 'in' ? 'bg-emerald-600' : 'bg-red-600'} text-white rounded-xl font-black uppercase text-xs shadow-xl active:scale-95 transition-all flex items-center gap-3`}>
+                      {isLoading ? <RefreshCw className="animate-spin" size={18} /> : <><Save size={18} /> SIMPAN DATA</>}
+                    </button>
+                  </div>
+                </form>
+              </div>
             )
           )}
         </div>

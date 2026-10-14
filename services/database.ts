@@ -676,14 +676,16 @@ export const db = {
     if (!cached || cached.length === 0) {
       cached = await idbStorage.get<SimpleTransaction[]>(cacheKey, []);
       if (cached && cached.length > 0) {
-        simpleTxCache[module] = { data: cached, timestamp: now };
+        // Do not set timestamp to 'now' so delta sync is not blocked on initial memory hydration
+        simpleTxCache[module] = { data: cached, timestamp: 0 };
       }
     }
 
     // DELTA SYNC UNTUK SIMPLE TRANSACTIONS:
-    // Hanya ambil transaksi baru jika sudah ada data lokal
+    // Hanya ambil transaksi baru jika sudah ada data lokal dan bukan forceFresh
     if (!forceFresh && cached && cached.length > 0) {
-      if (now - (simpleTxCache[module]?.timestamp || 0) < 45000) {
+      // Jika baru saja disinkronkan kurang dari 15 detik lalu, gunakan cache
+      if (simpleTxCache[module]?.timestamp && (now - simpleTxCache[module].timestamp < 15000)) {
         return cached;
       }
 
@@ -696,9 +698,8 @@ export const db = {
         .order('timestamp', { ascending: false });
 
       if (!deltaErr && delta) {
-        simpleTxCache[module] = { data: cached, timestamp: now };
         if (delta.length === 0) {
-          // Zero egress!
+          simpleTxCache[module] = { data: cached, timestamp: now };
           return cached;
         }
 
@@ -769,10 +770,9 @@ export const db = {
     }
   },
 
-  addSimpleTransaction: async (tx: SimpleTransaction): Promise<void> => {
-    // Invalidate simple cache
+  addSimpleTransaction: async (tx: SimpleTransaction): Promise<SimpleTransaction> => {
+    // Invalidate simple items cache
     delete simpleItemsCache[tx.module];
-    delete simpleTxCache[tx.module];
 
     const { data: existing } = await supabase
       .from('simple_master_items')
@@ -791,20 +791,48 @@ export const db = {
     }
 
     const payload = {
-      timestamp: tx.timestamp,
+      timestamp: tx.timestamp || Date.now(),
       type: tx.type,
       item_name: tx.itemName,
       quantity: tx.quantity,
       unit: tx.unit,
-      supplier: tx.supplier,
-      recipient: tx.recipient,
+      supplier: tx.supplier || null,
+      recipient: tx.recipient || null,
       officer: tx.officer,
-      note: tx.note,
+      note: tx.note || null,
       module: tx.module
     };
 
-    const { error = null } = await supabase.from('simple_transactions').insert(payload);
+    const { data, error = null } = await supabase
+      .from('simple_transactions')
+      .insert(payload)
+      .select()
+      .single();
+
     if (error) throw error;
+
+    const savedTx: SimpleTransaction = {
+      id: data?.id || `tx-${Date.now()}`,
+      timestamp: Number(data?.timestamp) || payload.timestamp,
+      type: data?.type || payload.type,
+      itemName: data?.item_name || payload.item_name,
+      quantity: Number(data?.quantity) || payload.quantity,
+      unit: data?.unit || payload.unit,
+      supplier: data?.supplier || payload.supplier || undefined,
+      recipient: data?.recipient || payload.recipient || undefined,
+      officer: data?.officer || payload.officer,
+      note: data?.note || payload.note || undefined,
+      module: data?.module || payload.module
+    };
+
+    // Optimistic cache update in memory and in IndexedDB
+    const cacheKey = `${CACHE_KEYS.SIMPLE_TX}_${tx.module}`;
+    const prevCached = simpleTxCache[tx.module]?.data || await idbStorage.get<SimpleTransaction[]>(cacheKey, []);
+    const updated = [savedTx, ...prevCached.filter(t => t.id !== savedTx.id)];
+    simpleTxCache[tx.module] = { data: updated, timestamp: Date.now() };
+    await idbStorage.set(cacheKey, updated);
+
+    return savedTx;
   },
 
   getOpnameRequests: async (forceFresh = false): Promise<OpnameRequest[]> => {
