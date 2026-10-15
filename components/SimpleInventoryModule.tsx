@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { SimpleItem, SimpleTransaction, User } from '../types.ts';
-import { db } from '../services/database.ts';
+import { db, supabase } from '../services/database.ts';
 import {
   Package, History,
   FileSpreadsheet, Search, User as UserIcon,
@@ -154,10 +154,16 @@ const SimpleInventoryModule: React.FC<SimpleInventoryModuleProps> = ({ module, c
       ]);
       setMasterItems(items);
       setTransactions(prev => {
-        // Cegah transaksi lokal baru tertimpa jika Supabase sedang lambat
         const txIds = new Set(txs.map(t => t.id));
         const now = Date.now();
-        const pendingLocal = prev.filter(t => !txIds.has(t.id) && (now - (Number(t.timestamp) || 0) < 300000));
+        // Hanya pertahankan transaksi lokal sementara yang sesuai modul ini dan belum masuk Supabase
+        const pendingLocal = prev.filter(t =>
+          t.module === targetModule &&
+          !txIds.has(t.id) &&
+          t.id?.startsWith('tx-') &&
+          !txs.some(s => s.itemName === t.itemName && s.type === t.type && Math.abs((Number(s.timestamp) || 0) - (Number(t.timestamp) || 0)) < 15000) &&
+          (now - (Number(t.timestamp) || 0) < 300000)
+        );
         return [...pendingLocal, ...txs].sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
       });
     } catch (err) {
@@ -167,7 +173,55 @@ const SimpleInventoryModule: React.FC<SimpleInventoryModuleProps> = ({ module, c
     }
   };
 
-  useEffect(() => { loadData(); }, [module, subModule]);
+  useEffect(() => {
+    loadData(true);
+
+    const targetModule = isHRGAMode ? subModule : module;
+    const channel = supabase
+      .channel(`rt-simple-${targetModule}-${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'simple_transactions' },
+        (payload) => {
+          const mod = (payload.new as any)?.module || (payload.old as any)?.module;
+          if (!mod || mod === targetModule) {
+            db.invalidateSimpleTxCache(targetModule);
+            loadData(true);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'simple_master_items' },
+        (payload) => {
+          const mod = (payload.new as any)?.module || (payload.old as any)?.module;
+          if (!mod || mod === targetModule) {
+            loadData(true);
+          }
+        }
+      )
+      .subscribe();
+
+    // Auto-refresh fallback setiap 15 detik jika tab browser sedang dibuka/aktif
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadData(false);
+      }
+    }, 15000);
+
+    const handleFocus = () => {
+      if (document.visibilityState === 'visible') {
+        loadData(true);
+      }
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [module, subModule, isHRGAMode]);
 
   const [successToast, setSuccessToast] = useState<{ message: string; tx: SimpleTransaction } | null>(null);
 

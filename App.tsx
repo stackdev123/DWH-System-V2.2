@@ -352,6 +352,8 @@ export const App: React.FC = () => {
                 db.invalidateLogsCache();
               }
               scheduleDebouncedRefresh();
+            } else if (table === 'simple_transactions' || table === 'simple_master_items') {
+              db.invalidateSimpleTxCache();
             }
           }
         )

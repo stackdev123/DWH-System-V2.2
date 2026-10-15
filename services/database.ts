@@ -177,10 +177,22 @@ export const db = {
   invalidateProductsCache: () => { productsCacheDirty = true; },
   invalidateStockCache: () => { stockCacheDirty = true; },
   invalidateLogsCache: () => { logsCacheDirty = true; },
+  invalidateSimpleTxCache: (mod?: 'MT' | 'GA' | 'HR') => {
+    if (mod) {
+      delete simpleTxCache[mod];
+    } else {
+      delete simpleTxCache['MT'];
+      delete simpleTxCache['GA'];
+      delete simpleTxCache['HR'];
+    }
+  },
   clearAllCache: () => {
     productsCacheDirty = true;
     stockCacheDirty = true;
     logsCacheDirty = true;
+    delete simpleTxCache['MT'];
+    delete simpleTxCache['GA'];
+    delete simpleTxCache['HR'];
     lastProductsFetch = 0;
     lastStockFetch = 0;
     lastLogsFetch = 0;
@@ -877,79 +889,26 @@ export const db = {
     if (!cached || cached.length === 0) {
       cached = await idbStorage.get<SimpleTransaction[]>(cacheKey, []);
       if (cached && cached.length > 0) {
-        // Do not set timestamp to 'now' so delta sync is not blocked on initial memory hydration
         simpleTxCache[module] = { data: cached, timestamp: 0 };
       }
     }
 
-    // DELTA SYNC UNTUK SIMPLE TRANSACTIONS:
-    // Hanya ambil transaksi baru jika sudah ada data lokal dan bukan forceFresh
-    if (!forceFresh && cached && cached.length > 0) {
-      // Jika baru saja disinkronkan kurang dari 15 detik lalu, gunakan cache
-      if (simpleTxCache[module]?.timestamp && (now - simpleTxCache[module].timestamp < 15000)) {
-        return cached;
-      }
-
-      const maxTs = cached.reduce((max, t) => (Number(t.timestamp) || 0) > max ? Number(t.timestamp) : max, 0);
-      const { data: delta, error: deltaErr } = await supabase
-        .from('simple_transactions')
-        .select('id, timestamp, type, item_name, quantity, unit, supplier, recipient, officer, note, module')
-        .eq('module', module)
-        .gt('timestamp', maxTs)
-        .order('timestamp', { ascending: false });
-
-      if (!deltaErr && delta) {
-        if (delta.length === 0) {
-          simpleTxCache[module] = { data: cached, timestamp: now };
-          return cached;
-        }
-
-        const mappedDelta: SimpleTransaction[] = delta.map(t => ({
-          id: t.id,
-          timestamp: Number(t.timestamp) || 0,
-          type: t.type,
-          itemName: t.item_name,
-          quantity: t.quantity,
-          unit: t.unit,
-          supplier: t.supplier,
-          recipient: t.recipient,
-          officer: t.officer,
-          note: t.note,
-          module: t.module
-        }));
-
-        const idSet = new Set(mappedDelta.map(d => d.id));
-        const merged = [...mappedDelta, ...cached.filter(c => !idSet.has(c.id))];
-        merged.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
-        simpleTxCache[module] = { data: merged, timestamp: now };
-        idbStorage.set(cacheKey, merged);
-        return merged;
-      }
+    // Jika dipanggil berturut-turut dalam 3 detik dan bukan forceFresh, gunakan cache untuk efisiensi
+    if (!forceFresh && cached && cached.length > 0 && simpleTxCache[module]?.timestamp && (now - simpleTxCache[module].timestamp < 3000)) {
+      return cached;
     }
 
     try {
-      const { count } = await supabase.from('simple_transactions').select('id', { count: 'exact', head: true }).eq('module', module);
-      const total = count || 0;
-      const pageSize = 1000;
-      const numPages = Math.max(1, Math.ceil(total / pageSize));
+      const { data: allData, error } = await supabase
+        .from('simple_transactions')
+        .select('id, timestamp, type, item_name, quantity, unit, supplier, recipient, officer, note, module')
+        .eq('module', module)
+        .order('timestamp', { ascending: false })
+        .limit(2000);
 
-      const promises = [];
-      for (let i = 0; i < numPages; i++) {
-        promises.push(
-          supabase
-            .from('simple_transactions')
-            .select('id, timestamp, type, item_name, quantity, unit, supplier, recipient, officer, note, module')
-            .eq('module', module)
-            .order('timestamp', { ascending: false })
-            .range(i * pageSize, (i + 1) * pageSize - 1)
-            .then(r => r.data || [])
-        );
-      }
+      if (error) throw error;
 
-      const chunks = await Promise.all(promises);
-      const allData = chunks.flat();
-
-      const mapped = allData.map(t => ({
+      const mapped: SimpleTransaction[] = (allData || []).map(t => ({
         id: t.id,
         timestamp: Number(t.timestamp) || 0,
         type: t.type,
@@ -963,17 +922,20 @@ export const db = {
         module: t.module
       }));
 
-      // Cegah transaksi baru hilang jika Supabase lag: pertahankan transaksi lokal baru (< 10 menit)
       const fetchedIdSet = new Set(mapped.map(t => t.id));
-      const nowTs = Date.now();
-      const pendingLocal = (cached || []).filter(t => !fetchedIdSet.has(t.id) && (nowTs - (Number(t.timestamp) || 0) < 600000));
 
-      // Cek juga dari offline queue
+      // Hanya masukkan pending dari offline queue jika benar-benar belum masuk Supabase
+      const pendingLocal: SimpleTransaction[] = [];
       const currentQueue = getOfflineQueue();
       currentQueue.forEach(task => {
         if (task.type === 'SIMPLE_TX' && task.payload && task.payload.module === module) {
           const txItem = task.payload as SimpleTransaction;
-          if (!fetchedIdSet.has(txItem.id) && !pendingLocal.some(p => p.id === txItem.id)) {
+          const isAlreadyInSupabase = fetchedIdSet.has(txItem.id) || mapped.some(m =>
+            m.itemName === txItem.itemName &&
+            m.type === txItem.type &&
+            Math.abs((Number(m.timestamp) || 0) - (Number(txItem.timestamp) || 0)) < 15000
+          );
+          if (!isAlreadyInSupabase && !pendingLocal.some(p => p.id === txItem.id)) {
             pendingLocal.push(txItem);
           }
         }
