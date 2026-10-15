@@ -57,10 +57,11 @@ function ensureIdbReady(): Promise<void> {
   if (!idbHydrationPromise) {
     idbHydrationPromise = (async () => {
       try {
-        const [p, s, l] = await Promise.all([
+        const [p, s, l, q] = await Promise.all([
           idbStorage.get<Product[]>(CACHE_KEYS.PRODUCTS, cachedProducts),
           idbStorage.get<StockItem[]>(CACHE_KEYS.STOCK, cachedStock),
-          idbStorage.get<LogEntry[]>(CACHE_KEYS.LOGS, cachedLogs)
+          idbStorage.get<LogEntry[]>(CACHE_KEYS.LOGS, cachedLogs),
+          idbStorage.get<OfflineTask[]>(OFFLINE_QUEUE_KEY, inMemoryOfflineQueue)
         ]);
 
         if (Array.isArray(p) && p.length > 0) {
@@ -75,6 +76,12 @@ function ensureIdbReady(): Promise<void> {
           cachedLogs = l;
           logsCacheDirty = false;
         }
+        if (Array.isArray(q) && q.length > 0) {
+          const current = getOfflineQueue();
+          const currentIds = new Set(current.map(item => item.id));
+          const mergedQueue = [...current, ...q.filter(item => !currentIds.has(item.id))];
+          saveOfflineQueue(mergedQueue);
+        }
       } catch (err) {
         console.warn("IndexedDB hydration error, continuing with memory cache:", err);
       }
@@ -85,6 +92,82 @@ function ensureIdbReady(): Promise<void> {
 
 // Immediately trigger hydration on file load
 ensureIdbReady();
+
+/**
+ * Menjamin eksekusi fungsi database dengan mekanisme auto-retry, exponential backoff,
+ * dan per-attempt connection timeout (12 detik).
+ * Mencegah kegagalan input akibat gangguan jaringan sementara, latency Wi-Fi gudang,
+ * atau timeout koneksi Supabase.
+ */
+export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, initialDelayMs = 400, timeoutMs = 12000): Promise<T> {
+  let lastError: any;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      let timerId: any;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timerId = setTimeout(() => reject(new Error(`Timeout koneksi database (${timeoutMs / 1000}s)`)), timeoutMs);
+      });
+      const result = await Promise.race([fn(), timeoutPromise]);
+      clearTimeout(timerId);
+      return result;
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[DWH Network Retry] Percobaan ${attempt}/${maxRetries} gagal:`, err?.message || err);
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, initialDelayMs * Math.pow(1.5, attempt - 1)));
+      }
+    }
+  }
+  throw lastError;
+}
+
+// --- OFFLINE RESILIENCE QUEUE ---
+const OFFLINE_QUEUE_KEY = `bsi_dwh_offline_queue_${PROJECT_ID}`;
+
+export interface OfflineTask {
+  id: string;
+  type: 'STOCK_ITEMS' | 'LOGS' | 'SIMPLE_TX' | 'UPDATE_STOCK_ITEM' | 'PRODUCT_BALANCE';
+  payload: any;
+  timestamp: number;
+}
+
+let inMemoryOfflineQueue: OfflineTask[] = safeGetStorage<OfflineTask[]>(OFFLINE_QUEUE_KEY, []);
+
+function getOfflineQueue(): OfflineTask[] {
+  try {
+    const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        inMemoryOfflineQueue = parsed;
+        return parsed;
+      }
+    }
+  } catch { }
+  return inMemoryOfflineQueue;
+}
+
+function saveOfflineQueue(queue: OfflineTask[]): void {
+  inMemoryOfflineQueue = queue;
+  try {
+    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+  } catch (e) {
+    console.warn("localStorage quota reached, persisted to IndexedDB only", e);
+  }
+  idbStorage.set(OFFLINE_QUEUE_KEY, queue).catch(() => { });
+}
+
+function enqueueOffline(type: OfflineTask['type'], payload: any): void {
+  const queue = getOfflineQueue();
+  queue.push({
+    id: `queue-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+    type,
+    payload,
+    timestamp: Date.now()
+  });
+  saveOfflineQueue(queue);
+  console.info(`[DWH Offline Queue] Disimpan ke antrean offline: ${type}`);
+}
 
 export const db = {
   getCachedProducts: (): Product[] => cachedProducts,
@@ -224,46 +307,86 @@ export const db = {
     if (error) throw error;
   },
 
-  updateProductBalance: async (productName: string, qtyChange: number): Promise<void> => {
+  updateProductBalance: async (productName: string, qtyChange: number, allowQueue = true): Promise<void> => {
     productsCacheDirty = true;
-    const { data: prod, error: fetchErr } = await supabase
-      .from('products')
-      .select('id, stock')
-      .eq('name', productName)
-      .single();
+    const cleanName = (productName || '').trim();
+    if (!cleanName) return;
 
-    if (fetchErr || !prod) return;
+    try {
+      let prod: any = null;
+      await withRetry(async () => {
+        const { data, error } = await supabase
+          .from('products')
+          .select('id, stock')
+          .eq('name', cleanName)
+          .maybeSingle();
 
-    const newStock = (prod.stock || 0) + qtyChange;
-    const { error: updateErr } = await supabase
-      .from('products')
-      .update({ stock: newStock })
-      .eq('id', prod.id);
+        if (!error && data) {
+          prod = data;
+          return;
+        }
 
-    if (updateErr) throw updateErr;
+        const { data: dataIlike } = await supabase
+          .from('products')
+          .select('id, stock')
+          .ilike('name', cleanName)
+          .maybeSingle();
+
+        if (dataIlike) prod = dataIlike;
+      });
+
+      if (!prod) return;
+
+      const newStock = (Number(prod.stock) || 0) + qtyChange;
+      await withRetry(async () => {
+        const { error: updateErr } = await supabase
+          .from('products')
+          .update({ stock: newStock })
+          .eq('id', prod.id);
+
+        if (updateErr) throw updateErr;
+      });
+    } catch (err) {
+      console.error("updateProductBalance error:", err);
+      if (allowQueue) {
+        enqueueOffline('PRODUCT_BALANCE', { productName, qtyChange });
+      }
+    }
   },
 
   updateStockItemBalance: async (uniqueId: string, qtyChange: number): Promise<void> => {
     stockCacheDirty = true;
     if (!uniqueId || uniqueId === 'SYSTEM-MIGRATION') return;
-    const { data: item, error: fetchErr } = await supabase
-      .from('stock_items')
-      .select('quantity')
-      .eq('unique_id', uniqueId)
-      .maybeSingle();
 
-    if (fetchErr || !item) return;
+    try {
+      let item: any = null;
+      await withRetry(async () => {
+        const { data, error: fetchErr } = await supabase
+          .from('stock_items')
+          .select('quantity')
+          .eq('unique_id', uniqueId)
+          .maybeSingle();
 
-    const newQty = (item.quantity || 0) + qtyChange;
-    const { error: updateErr } = await supabase
-      .from('stock_items')
-      .update({
-        quantity: newQty,
-        status: newQty > 0 ? ItemStatus.IN_STOCK : ItemStatus.OUTBOUND
-      })
-      .eq('unique_id', uniqueId);
+        if (!fetchErr && data) item = data;
+      });
 
-    if (updateErr) throw updateErr;
+      if (!item) return;
+
+      const newQty = (Number(item.quantity) || 0) + qtyChange;
+      await withRetry(async () => {
+        const { error: updateErr } = await supabase
+          .from('stock_items')
+          .update({
+            quantity: newQty,
+            status: newQty > 0 ? ItemStatus.IN_STOCK : ItemStatus.OUTBOUND
+          })
+          .eq('unique_id', uniqueId);
+
+        if (updateErr) throw updateErr;
+      });
+    } catch (err) {
+      console.error("updateStockItemBalance error:", err);
+    }
   },
 
   deleteLogAndReverse: async (log: LogEntry): Promise<void> => {
@@ -397,12 +520,30 @@ export const db = {
           quantity: s.quantity,
           note: s.note
         }));
-        cachedStock = mapped;
+        // Cegah inputan hilang: Pertahankan batch lokal yang baru dibuat / diperbarui (< 10 menit)
+        const fetchedUniqueIds = new Set(mapped.map(s => s.uniqueId));
+        const nowTs = Date.now();
+        const pendingLocal = cachedStock.filter(s => !fetchedUniqueIds.has(s.uniqueId) && (nowTs - (Number(s.createdAt) || 0) < 600000));
+
+        // Sertakan juga dari antrean offline jika ada
+        const currentQueue = getOfflineQueue();
+        currentQueue.forEach(task => {
+          if (task.type === 'STOCK_ITEMS' && Array.isArray(task.payload)) {
+            task.payload.forEach((item: StockItem) => {
+              if (!fetchedUniqueIds.has(item.uniqueId) && !pendingLocal.some(p => p.uniqueId === item.uniqueId)) {
+                pendingLocal.push(item);
+              }
+            });
+          }
+        });
+
+        const mergedStock = [...mapped, ...pendingLocal];
+        cachedStock = mergedStock;
         stockCacheDirty = false;
         lastStockFetch = now;
-        idbStorage.set(CACHE_KEYS.STOCK, mapped);
-        safeSetStorage(CACHE_KEYS.STOCK, mapped.slice(0, 500));
-        return mapped;
+        idbStorage.set(CACHE_KEYS.STOCK, mergedStock);
+        safeSetStorage(CACHE_KEYS.STOCK, mergedStock.slice(0, 500));
+        return mergedStock;
       }
     } catch (e) {
       console.warn("getAllStock warning, using cached:", e);
@@ -494,12 +635,33 @@ export const db = {
           quantityChange: Number(l.quantity_change) || 0,
           user: l.user
         }));
-        cachedLogs = mapped;
+
+        // Cegah inputan hilang: Pertahankan log lokal yang baru masuk (< 10 menit) atau yang masih di antrean offline
+        const fetchedIdSet = new Set(mapped.map(l => l.id));
+        const nowTs = Date.now();
+        const pendingLocal = cachedLogs.filter(l => !fetchedIdSet.has(l.id) && (nowTs - (Number(l.timestamp) || 0) < 600000));
+
+        const offlineQueue = getOfflineQueue();
+        const offlineLogs: LogEntry[] = [];
+        offlineQueue.forEach(task => {
+          if (task.type === 'LOGS' && Array.isArray(task.payload)) {
+            task.payload.forEach((item: LogEntry) => {
+              if (!fetchedIdSet.has(item.id) && !pendingLocal.some(p => p.id === item.id) && !offlineLogs.some(o => o.id === item.id)) {
+                offlineLogs.push(item);
+              }
+            });
+          }
+        });
+
+        const mergedLogs = [...pendingLocal, ...offlineLogs, ...mapped];
+        mergedLogs.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+
+        cachedLogs = mergedLogs;
         logsCacheDirty = false;
         lastLogsFetch = now;
-        idbStorage.set(CACHE_KEYS.LOGS, mapped);
-        safeSetStorage(CACHE_KEYS.LOGS, mapped.slice(0, 500));
-        return mapped;
+        idbStorage.set(CACHE_KEYS.LOGS, mergedLogs);
+        safeSetStorage(CACHE_KEYS.LOGS, mergedLogs.slice(0, 500));
+        return mergedLogs;
       }
     } catch (e) {
       console.warn("getAllLogs warning, using cached:", e);
@@ -509,59 +671,82 @@ export const db = {
     return [];
   },
 
-  addStockItems: async (items: StockItem[]): Promise<void> => {
+  addStockItems: async (items: StockItem[], allowQueue = true): Promise<void> => {
     stockCacheDirty = true;
     productsCacheDirty = true;
-    for (const item of items) {
-      const { data: existing } = await supabase
-        .from('stock_items')
-        .select('quantity, status')
-        .eq('unique_id', item.uniqueId)
-        .single();
 
-      if (existing) {
-        await supabase
-          .from('stock_items')
-          .update({
-            quantity: item.quantity,
-            status: item.status,
+    // Optimistic in-memory and IndexedDB cache update immediately
+    const existingMap = new Map(cachedStock.map(s => [s.uniqueId, s]));
+    items.forEach(item => existingMap.set(item.uniqueId, item));
+    cachedStock = Array.from(existingMap.values());
+    idbStorage.set(CACHE_KEYS.STOCK, cachedStock);
+    safeSetStorage(CACHE_KEYS.STOCK, cachedStock.slice(0, 500));
+
+    try {
+      for (const item of items) {
+        await withRetry(async () => {
+          const payload = {
+            unique_id: item.uniqueId,
+            product_id: item.productId,
+            product_name: item.productName,
+            batch_code: item.batchCode || null,
             arrival_date: item.arrivalDate,
             expiry_date: item.expiryDate || null,
             supplier: item.supplier,
+            status: item.status,
+            created_at_ts: item.createdAt || Date.now(),
+            quantity: item.quantity,
             note: item.note || null
-          })
-          .eq('unique_id', item.uniqueId);
+          };
+          const { error } = await supabase
+            .from('stock_items')
+            .upsert(payload, { onConflict: 'unique_id' });
+          if (error) throw error;
+        });
+      }
+    } catch (err) {
+      console.error("addStockItems network error:", err);
+      if (allowQueue) {
+        enqueueOffline('STOCK_ITEMS', items);
       } else {
-        const payload = {
-          unique_id: item.uniqueId,
-          product_id: item.productId,
-          product_name: item.productName,
-          batch_code: item.batchCode || null,
-          arrival_date: item.arrivalDate,
-          expiry_date: item.expiryDate || null,
-          supplier: item.supplier,
-          status: item.status,
-          created_at_ts: item.createdAt,
-          quantity: item.quantity,
-          note: item.note || null
-        };
-        await supabase.from('stock_items').insert(payload);
+        throw err;
       }
     }
   },
 
-  updateStockItem: async (item: StockItem): Promise<void> => {
+  updateStockItem: async (item: StockItem, allowQueue = true): Promise<void> => {
     stockCacheDirty = true;
     productsCacheDirty = true;
-    const { error } = await supabase
-      .from('stock_items')
-      .update({
-        status: item.status,
-        quantity: item.quantity,
-        note: item.note
-      })
-      .eq('unique_id', item.uniqueId);
-    if (error) throw error;
+
+    // Optimistic cache update
+    cachedStock = cachedStock.map(s => s.uniqueId === item.uniqueId ? item : s);
+    idbStorage.set(CACHE_KEYS.STOCK, cachedStock);
+    safeSetStorage(CACHE_KEYS.STOCK, cachedStock.slice(0, 500));
+
+    try {
+      await withRetry(async () => {
+        // Jika item virtual legacy (uniqueId === productId), tidak perlu update stock_items
+        if (item.uniqueId === item.productId || item.uniqueId === 'SYSTEM-MIGRATION') {
+          return;
+        }
+        const { error } = await supabase
+          .from('stock_items')
+          .update({
+            status: item.status,
+            quantity: item.quantity,
+            note: item.note
+          })
+          .eq('unique_id', item.uniqueId);
+        if (error) throw error;
+      });
+    } catch (err) {
+      console.error("updateStockItem error:", err);
+      if (allowQueue) {
+        enqueueOffline('UPDATE_STOCK_ITEM', item);
+      } else {
+        throw err;
+      }
+    }
   },
 
   extendExpiryDate: async (uniqueId: string, newExpiryDate: string): Promise<void> => {
@@ -571,16 +756,26 @@ export const db = {
     if (!updatedNote.includes(`[EXT_FROM:${item?.expiry_date}]`)) {
       updatedNote = updatedNote ? updatedNote + ` [EXTENDED] [EXT_FROM:${item?.expiry_date}]` : `[EXTENDED] [EXT_FROM:${item?.expiry_date}]`;
     }
-    const { error } = await supabase
-      .from('stock_items')
-      .update({ expiry_date: newExpiryDate, note: updatedNote })
-      .eq('unique_id', uniqueId);
-    if (error) throw error;
+    await withRetry(async () => {
+      const { error } = await supabase
+        .from('stock_items')
+        .update({ expiry_date: newExpiryDate, note: updatedNote })
+        .eq('unique_id', uniqueId);
+      if (error) throw error;
+    });
   },
 
-  addLogEntries: async (logs: LogEntry[]): Promise<void> => {
+  addLogEntries: async (logs: LogEntry[], allowQueue = true): Promise<void> => {
     logsCacheDirty = true;
     productsCacheDirty = true;
+
+    // Optimistic cache update immediately so it is never lost from view
+    const currentMap = new Map(cachedLogs.map(l => [l.id, l]));
+    logs.forEach(l => currentMap.set(l.id, l));
+    cachedLogs = Array.from(currentMap.values()).sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+    idbStorage.set(CACHE_KEYS.LOGS, cachedLogs);
+    safeSetStorage(CACHE_KEYS.LOGS, cachedLogs.slice(0, 500));
+
     const payload = logs.map(l => ({
       id: l.id,
       type: l.type,
@@ -593,17 +788,23 @@ export const db = {
       user: l.user
     }));
 
-    const { error } = await supabase.from('logs').insert(payload);
-    if (error) throw error;
+    try {
+      await withRetry(async () => {
+        const { error } = await supabase.from('logs').upsert(payload, { onConflict: 'id' });
+        if (error) throw error;
+      });
 
-    // Optimistic cache update
-    cachedLogs = [...logs, ...cachedLogs];
-    idbStorage.set(CACHE_KEYS.LOGS, cachedLogs);
-    safeSetStorage(CACHE_KEYS.LOGS, cachedLogs.slice(0, 500));
-
-    for (const log of logs) {
-      if (log.quantityChange !== undefined && log.quantityChange !== 0) {
-        await db.updateProductBalance(log.productName, log.quantityChange);
+      for (const log of logs) {
+        if (log.quantityChange !== undefined && log.quantityChange !== 0) {
+          await db.updateProductBalance(log.productName, log.quantityChange);
+        }
+      }
+    } catch (err) {
+      console.error("addLogEntries network error:", err);
+      if (allowQueue) {
+        enqueueOffline('LOGS', logs);
+      } else {
+        throw err;
       }
     }
   },
@@ -761,78 +962,168 @@ export const db = {
         note: t.note,
         module: t.module
       }));
-      simpleTxCache[module] = { data: mapped, timestamp: now };
-      idbStorage.set(cacheKey, mapped);
-      return mapped;
+
+      // Cegah transaksi baru hilang jika Supabase lag: pertahankan transaksi lokal baru (< 10 menit)
+      const fetchedIdSet = new Set(mapped.map(t => t.id));
+      const nowTs = Date.now();
+      const pendingLocal = (cached || []).filter(t => !fetchedIdSet.has(t.id) && (nowTs - (Number(t.timestamp) || 0) < 600000));
+
+      // Cek juga dari offline queue
+      const currentQueue = getOfflineQueue();
+      currentQueue.forEach(task => {
+        if (task.type === 'SIMPLE_TX' && task.payload && task.payload.module === module) {
+          const txItem = task.payload as SimpleTransaction;
+          if (!fetchedIdSet.has(txItem.id) && !pendingLocal.some(p => p.id === txItem.id)) {
+            pendingLocal.push(txItem);
+          }
+        }
+      });
+
+      const merged = [...pendingLocal, ...mapped];
+      merged.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+
+      simpleTxCache[module] = { data: merged, timestamp: now };
+      idbStorage.set(cacheKey, merged);
+      return merged;
     } catch {
       if (cached && cached.length > 0) return cached;
       return [];
     }
   },
 
-  addSimpleTransaction: async (tx: SimpleTransaction): Promise<SimpleTransaction> => {
-    // Invalidate simple items cache
+  addSimpleTransaction: async (tx: SimpleTransaction, allowQueue = true): Promise<SimpleTransaction> => {
     delete simpleItemsCache[tx.module];
 
-    const { data: existing } = await supabase
-      .from('simple_master_items')
-      .select('id')
-      .ilike('name', tx.itemName)
-      .eq('module', tx.module)
-      .maybeSingle();
-
-    if (!existing) {
-      await supabase.from('simple_master_items').insert({
-        name: tx.itemName,
-        unit: tx.unit,
-        module: tx.module,
-        initial_stock: 0
-      });
-    }
-
-    const payload = {
+    const savedTx: SimpleTransaction = {
+      id: tx.id || `tx-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
       timestamp: tx.timestamp || Date.now(),
       type: tx.type,
-      item_name: tx.itemName,
-      quantity: tx.quantity,
-      unit: tx.unit,
-      supplier: tx.supplier || null,
-      recipient: tx.recipient || null,
+      itemName: (tx.itemName || '').trim().toUpperCase(),
+      quantity: Number(tx.quantity) || 0,
+      unit: tx.unit || 'Pcs',
+      supplier: tx.supplier || undefined,
+      recipient: tx.recipient || undefined,
       officer: tx.officer,
-      note: tx.note || null,
+      note: tx.note || undefined,
       module: tx.module
     };
 
-    const { data, error = null } = await supabase
-      .from('simple_transactions')
-      .insert(payload)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    const savedTx: SimpleTransaction = {
-      id: data?.id || `tx-${Date.now()}`,
-      timestamp: Number(data?.timestamp) || payload.timestamp,
-      type: data?.type || payload.type,
-      itemName: data?.item_name || payload.item_name,
-      quantity: Number(data?.quantity) || payload.quantity,
-      unit: data?.unit || payload.unit,
-      supplier: data?.supplier || payload.supplier || undefined,
-      recipient: data?.recipient || payload.recipient || undefined,
-      officer: data?.officer || payload.officer,
-      note: data?.note || payload.note || undefined,
-      module: data?.module || payload.module
-    };
-
-    // Optimistic cache update in memory and in IndexedDB
+    // Optimistic cache update in memory and in IndexedDB immediately
     const cacheKey = `${CACHE_KEYS.SIMPLE_TX}_${tx.module}`;
     const prevCached = simpleTxCache[tx.module]?.data || await idbStorage.get<SimpleTransaction[]>(cacheKey, []);
     const updated = [savedTx, ...prevCached.filter(t => t.id !== savedTx.id)];
     simpleTxCache[tx.module] = { data: updated, timestamp: Date.now() };
     await idbStorage.set(cacheKey, updated);
 
+    try {
+      // 1. Registrasi master item jika belum ada (non-fatal, jangan gagalkan transaksi utama jika master item gagal)
+      try {
+        await withRetry(async () => {
+          const { data: existing } = await supabase
+            .from('simple_master_items')
+            .select('id')
+            .ilike('name', savedTx.itemName)
+            .eq('module', savedTx.module)
+            .maybeSingle();
+
+          if (!existing) {
+            await supabase.from('simple_master_items').insert({
+              name: savedTx.itemName,
+              unit: savedTx.unit,
+              module: savedTx.module,
+              initial_stock: 0
+            });
+          }
+        }, 2, 200, 5000);
+      } catch (masterErr) {
+        console.warn("Registrasi simple master item non-fatal warning:", masterErr);
+      }
+
+      // 2. Simpan transaksi utama ke Supabase
+      const payload = {
+        timestamp: savedTx.timestamp,
+        type: savedTx.type,
+        item_name: savedTx.itemName,
+        quantity: savedTx.quantity,
+        unit: savedTx.unit,
+        supplier: savedTx.supplier || null,
+        recipient: savedTx.recipient || null,
+        officer: savedTx.officer,
+        note: savedTx.note || null,
+        module: savedTx.module
+      };
+
+      await withRetry(async () => {
+        const { data, error = null } = await supabase
+          .from('simple_transactions')
+          .insert(payload)
+          .select('id')
+          .single();
+
+        if (error) throw error;
+        if (data?.id) {
+          const oldTempId = savedTx.id;
+          savedTx.id = data.id;
+          if (oldTempId !== data.id) {
+            const currentCached = simpleTxCache[savedTx.module]?.data || [];
+            const synced = currentCached.map(t => t.id === oldTempId ? { ...t, id: data.id } : t);
+            simpleTxCache[savedTx.module] = { data: synced, timestamp: Date.now() };
+            idbStorage.set(cacheKey, synced);
+          }
+        }
+      });
+    } catch (err) {
+      console.error("addSimpleTransaction error:", err);
+      if (allowQueue) {
+        enqueueOffline('SIMPLE_TX', savedTx);
+      } else {
+        throw err;
+      }
+    }
+
     return savedTx;
+  },
+
+  flushOfflineQueue: async (): Promise<number> => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return 0;
+    const queue = getOfflineQueue();
+    if (queue.length === 0) return 0;
+
+    const remaining: OfflineTask[] = [];
+    let processed = 0;
+
+    for (const task of queue) {
+      try {
+        if (task.type === 'STOCK_ITEMS') {
+          await db.addStockItems(task.payload, false);
+        } else if (task.type === 'LOGS') {
+          await db.addLogEntries(task.payload, false);
+        } else if (task.type === 'SIMPLE_TX') {
+          await db.addSimpleTransaction(task.payload, false);
+        } else if (task.type === 'UPDATE_STOCK_ITEM') {
+          await db.updateStockItem(task.payload, false);
+        } else if (task.type === 'PRODUCT_BALANCE') {
+          await db.updateProductBalance(task.payload.productName, task.payload.qtyChange, false);
+        }
+        processed++;
+      } catch (err: any) {
+        const errMsg = String(err?.message || err);
+        if (errMsg.includes('duplicate key') || errMsg.includes('already exists') || errMsg.includes('23505')) {
+          console.info(`[DWH Offline Queue] Task ${task.id} sudah ada di database, tandai selesai.`);
+          processed++;
+        } else {
+          console.warn(`[DWH Offline Queue] Gagal memproses task ${task.id}:`, err);
+          remaining.push(task);
+        }
+      }
+    }
+
+    saveOfflineQueue(remaining);
+    return processed;
+  },
+
+  getPendingOfflineCount: (): number => {
+    return getOfflineQueue().length;
   },
 
   getOpnameRequests: async (forceFresh = false): Promise<OpnameRequest[]> => {
@@ -924,3 +1215,17 @@ export const db = {
     await db.recalculateProductStock(productId);
   }
 };
+
+// Auto-flush antrean offline saat koneksi pulih atau secara periodik
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    console.info('[DWH Offline Resilience] Perangkat kembali online, memproses antrean...');
+    db.flushOfflineQueue();
+  });
+  // Periksa antrean offline setiap 20 detik jika ada transaksi yang tertunda
+  setInterval(() => {
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      db.flushOfflineQueue();
+    }
+  }, 20000);
+}

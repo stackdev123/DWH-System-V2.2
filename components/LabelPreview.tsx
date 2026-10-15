@@ -11,7 +11,7 @@ interface LabelPreviewProps {
 
 const LabelPreview: React.FC<LabelPreviewProps> = ({ data, scale = 1, className = '' }) => {
   // Dimensions: 10cm x 7cm
-  
+
   const formatDateReadable = (dateStr: string) => {
     if (!dateStr || dateStr === 'System' || dateStr === 'Migration') return dateStr;
     try {
@@ -27,9 +27,9 @@ const LabelPreview: React.FC<LabelPreviewProps> = ({ data, scale = 1, className 
 
   // Bersihkan prefix INITIAL- jika ada agar sesuai permintaan user
   const displayId = data.item.code?.replace('INITIAL-', '') || "---";
-  
+
   return (
-    <div 
+    <div
       className={`bg-white text-black font-sans box-border overflow-hidden relative flex flex-col border border-black ${className}`}
       style={{
         width: '10cm',
@@ -51,7 +51,7 @@ const LabelPreview: React.FC<LabelPreviewProps> = ({ data, scale = 1, className 
 
       {/* Body: QR and Details */}
       <div className="flex-1 flex flex-row relative h-full">
-        
+
         {/* Left: QR Code */}
         <div className="flex items-center justify-center p-2 border-r-2 border-black" style={{ width: '4.2cm' }}>
           <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -60,7 +60,7 @@ const LabelPreview: React.FC<LabelPreviewProps> = ({ data, scale = 1, className 
               style={{ height: "auto", maxWidth: "100%", width: "100%" }}
               value={displayId}
               viewBox={`0 0 256 256`}
-              level="M" 
+              level="M"
               bgColor="#FFFFFF"
               fgColor="#000000"
             />
@@ -83,7 +83,7 @@ const LabelPreview: React.FC<LabelPreviewProps> = ({ data, scale = 1, className 
                 <td className="align-middle text-slate-800 text-[14px]">Supp</td>
                 <td className="align-middle text-center text-[14px]">:</td>
                 <td className="align-middle leading-tight break-words whitespace-normal text-[14px] text-black">
-                   {data.supplier || "---"}
+                  {data.supplier || "---"}
                 </td>
               </tr>
 
@@ -107,8 +107,8 @@ const LabelPreview: React.FC<LabelPreviewProps> = ({ data, scale = 1, className 
 
       {/* Footer: Signature */}
       <div className="border-t-2 border-black flex flex-col items-center justify-start bg-white pt-2" style={{ height: '2.0cm' }}>
-         <span className="text-[12px] font-bold uppercase tracking-wider text-black">VERIFIED SIGNATURE</span>
-         <div className="mt-8 border-t border-black w-32"></div>
+        <span className="text-[12px] font-bold uppercase tracking-wider text-black">VERIFIED SIGNATURE</span>
+        <div className="mt-8 border-t border-black w-32"></div>
       </div>
 
     </div>

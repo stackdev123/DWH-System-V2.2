@@ -412,16 +412,21 @@ export const App: React.FC = () => {
     try {
       await db.addStockItems(items);
       await loadAllData(true);
-    } catch (error) {
-      alert("Gagal registrasi.");
+    } catch (error: any) {
+      console.error("Gagal registrasi:", error);
+      alert(`Gagal registrasi: ${error?.message || 'Koneksi database terganggu'}`);
     }
   };
 
   const handleInbound = async (items: StockItem[], note: string, isMigration: boolean = false) => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      alert("Sesi login Anda telah berakhir. Silakan login kembali.");
+      return;
+    }
+    if (!items || items.length === 0) return;
     try {
       const logEntries: LogEntry[] = items.map(item => ({
-        id: `LOG-IN-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        id: `LOG-IN-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
         type: 'IN',
         stockItemId: item.uniqueId,
         productName: item.productName,
@@ -434,17 +439,22 @@ export const App: React.FC = () => {
       await db.addStockItems(items.map(i => ({ ...i, status: ItemStatus.IN_STOCK, note: i.note || note })));
       await db.addLogEntries(logEntries);
       await loadAllData(true);
-    } catch (error) {
-      alert("Gagal inbound.");
+    } catch (error: any) {
+      console.error("Gagal inbound:", error);
+      alert(`Gagal inbound: ${error?.message || 'Koneksi terganggu'}`);
       throw error;
     }
   };
 
   const handleOutbound = async (requests: { item: StockItem, qtyToTake: number, recipient: string, note: string }[]) => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      alert("Sesi login Anda telah berakhir. Silakan login kembali.");
+      return;
+    }
+    if (!requests || requests.length === 0) return;
     try {
       const logEntries: LogEntry[] = requests.map(req => ({
-        id: `LOG-OUT-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        id: `LOG-OUT-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
         type: 'OUT',
         stockItemId: req.item.uniqueId,
         productName: req.item.productName,
@@ -465,19 +475,23 @@ export const App: React.FC = () => {
       }
       await db.addLogEntries(logEntries);
       await loadAllData(true);
-    } catch (error) {
-      alert("Gagal outbound.");
+    } catch (error: any) {
+      console.error("Gagal outbound:", error);
+      alert(`Gagal outbound: ${error?.message || 'Koneksi terganggu'}`);
       throw error;
     }
   };
 
   const handleAdjustment = async (item: StockItem, newQty: number, note: string) => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      alert("Sesi login Anda telah berakhir. Silakan login kembali.");
+      return;
+    }
     try {
       const diff = newQty - item.quantity;
       if (diff === 0) return;
       const logEntry: LogEntry = {
-        id: `LOG-ADJ-${Date.now()}`,
+        id: `LOG-ADJ-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
         type: 'ADJUST',
         stockItemId: item.uniqueId,
         productName: item.productName,
@@ -494,8 +508,9 @@ export const App: React.FC = () => {
       await db.updateStockItem(updatedItem);
       await db.addLogEntries([logEntry]);
       await loadAllData(true);
-    } catch (error) {
-      alert("Gagal adjustment.");
+    } catch (error: any) {
+      console.error("Gagal adjustment:", error);
+      alert(`Gagal penyesuaian stok: ${error?.message || 'Koneksi terganggu'}`);
     }
   };
 
@@ -542,8 +557,8 @@ export const App: React.FC = () => {
       <div className="fixed top-20 right-4 left-4 md:left-auto md:w-96 z-[9999] pointer-events-none flex flex-col gap-3">
         {notifications.map((notif) => (
           <div key={notif.id} className={`pointer-events-auto p-4 rounded-2xl shadow-2xl flex items-start gap-4 animate-in slide-in-from-right-10 duration-300 border ${notif.type === 'EMPTY' || notif.type === 'EXPIRED' ? 'bg-red-600 text-white border-red-500' :
-              notif.type === 'CRITICAL' || notif.type === 'EXPIRING_SOON' ? 'bg-amber-500 text-white border-amber-400' :
-                'bg-emerald-600 text-white border-emerald-500'
+            notif.type === 'CRITICAL' || notif.type === 'EXPIRING_SOON' ? 'bg-amber-500 text-white border-amber-400' :
+              'bg-emerald-600 text-white border-emerald-500'
             }`}>
             <div className="bg-white/20 p-2 rounded-xl shrink-0">
               {notif.type === 'EMPTY' || notif.type === 'EXPIRED' ? <AlertOctagon size={24} /> :
@@ -589,8 +604,8 @@ export const App: React.FC = () => {
               onClick={() => handleThemeChange(theme === 'dark' ? 'light' : 'dark')}
               title={theme === 'dark' ? 'Beralih ke Mode Terang' : 'Beralih ke Mode Gelap (Gudang Minim Cahaya)'}
               className={`p-2 rounded-xl border transition-all flex items-center justify-center ${theme === 'dark'
-                  ? 'bg-slate-800 text-amber-400 border-slate-700 hover:bg-slate-700 shadow-sm'
-                  : 'bg-slate-100 text-slate-600 border-slate-200 hover:text-red-600 hover:bg-slate-200'
+                ? 'bg-slate-800 text-amber-400 border-slate-700 hover:bg-slate-700 shadow-sm'
+                : 'bg-slate-100 text-slate-600 border-slate-200 hover:text-red-600 hover:bg-slate-200'
                 }`}
             >
               {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
@@ -601,8 +616,8 @@ export const App: React.FC = () => {
               onClick={() => setActiveTab('settings')}
               title="Menu Pengaturan"
               className={`p-2 rounded-xl transition-all border ${activeTab === 'settings'
-                  ? 'bg-red-50 text-red-600 border-red-200'
-                  : 'text-slate-400 border-transparent hover:text-slate-700 hover:bg-slate-100'
+                ? 'bg-red-50 text-red-600 border-red-200'
+                : 'text-slate-400 border-transparent hover:text-slate-700 hover:bg-slate-100'
                 }`}
             >
               <Sliders size={18} />

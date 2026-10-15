@@ -153,9 +153,15 @@ const SimpleInventoryModule: React.FC<SimpleInventoryModuleProps> = ({ module, c
         db.getSimpleTransactions(targetModule, forceFresh)
       ]);
       setMasterItems(items);
-      setTransactions(txs);
+      setTransactions(prev => {
+        // Cegah transaksi lokal baru tertimpa jika Supabase sedang lambat
+        const txIds = new Set(txs.map(t => t.id));
+        const now = Date.now();
+        const pendingLocal = prev.filter(t => !txIds.has(t.id) && (now - (Number(t.timestamp) || 0) < 300000));
+        return [...pendingLocal, ...txs].sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+      });
     } catch (err) {
-      console.error(err);
+      console.error("Gagal loadData simple module:", err);
     } finally {
       setIsLoading(false);
     }
@@ -175,20 +181,42 @@ const SimpleInventoryModule: React.FC<SimpleInventoryModuleProps> = ({ module, c
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isViewer || !form.name || form.qty <= 0) return;
+    if (isViewer) {
+      alert("Akun Viewer hanya memiliki akses baca (tidak dapat menyimpan transaksi).");
+      return;
+    }
+    const cleanName = (form.name || '').trim();
+    const cleanQty = Number(form.qty);
+    if (!cleanName) {
+      alert("Mohon isi Nama Barang terlebih dahulu.");
+      return;
+    }
+    if (isNaN(cleanQty) || cleanQty <= 0) {
+      alert("Mohon isi Quantity (jumlah barang) lebih dari 0.");
+      return;
+    }
+    if (activeTab === 'in' && !form.supplier?.trim()) {
+      alert("Mohon isi nama Supplier untuk barang masuk.");
+      return;
+    }
+    if (activeTab === 'out' && !form.recipient?.trim()) {
+      alert("Mohon isi nama Penerima untuk barang keluar.");
+      return;
+    }
+
     setIsLoading(true);
     const targetModule = isHRGAMode ? subModule : module;
     try {
       const tx: SimpleTransaction = {
         timestamp: Date.now(),
         type: activeTab === 'in' ? 'IN' : 'OUT',
-        itemName: form.name.toUpperCase().trim(),
-        quantity: Number(form.qty) || 0,
+        itemName: cleanName.toUpperCase(),
+        quantity: cleanQty,
         unit: form.unit || 'Pcs',
-        supplier: activeTab === 'in' ? form.supplier : undefined,
-        recipient: activeTab === 'out' ? form.recipient : undefined,
-        officer: currentUser.username,
-        note: form.note,
+        supplier: activeTab === 'in' ? form.supplier.trim() : undefined,
+        recipient: activeTab === 'out' ? form.recipient.trim() : undefined,
+        officer: currentUser?.username || 'GUDANG',
+        note: form.note?.trim() || undefined,
         module: targetModule
       };
       const savedTx = await db.addSimpleTransaction(tx);
@@ -200,9 +228,9 @@ const SimpleInventoryModule: React.FC<SimpleInventoryModuleProps> = ({ module, c
         tx: savedTx
       });
       await loadData(true);
-    } catch (err) {
-      console.error(err);
-      alert("Gagal simpan.");
+    } catch (err: any) {
+      console.error("Gagal simpan transaksi:", err);
+      alert(`Gagal simpan: ${err?.message || 'Terjadi gangguan jaringan database'}`);
     } finally {
       setIsLoading(false);
     }
