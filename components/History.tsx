@@ -252,13 +252,18 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
   const filteredLogs = useMemo(() => {
     const search = (searchTerm || '').toLowerCase();
     const result = logs.filter(l => {
-      const matchSearch = String(l.productName || '').toLowerCase().includes(search) || (l.recipient && String(l.recipient).toLowerCase().includes(search)) || (l.user && String(l.user).toLowerCase().includes(search));
+      const prod = products.find(p => p.name === l.productName);
+      const matchSearch = String(l.productName || '').toLowerCase().includes(search) ||
+        (prod && String(prod.id).toLowerCase().includes(search)) ||
+        (l.stockItemId && String(l.stockItemId).toLowerCase().includes(search)) ||
+        (l.recipient && String(l.recipient).toLowerCase().includes(search)) ||
+        (l.user && String(l.user).toLowerCase().includes(search));
       const matchDate = l.timestamp >= filterStartTs && l.timestamp <= filterEndTs;
       const matchType = typeFilter === 'ALL' || String(l.type || '').trim().toUpperCase() === typeFilter;
       return matchSearch && matchDate && matchType;
     });
     return result.sort((a, b) => b.timestamp - a.timestamp);
-  }, [logs, searchTerm, filterStartTs, filterEndTs, typeFilter]);
+  }, [logs, searchTerm, filterStartTs, filterEndTs, typeFilter, products]);
 
   const downloadRekapExcel = () => {
     const data = reportData.map(r => ({
@@ -279,12 +284,14 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
   const downloadBukuMutasiExcel = () => {
     const data = filteredLogs.map(l => {
       const item = getItem(l.stockItemId);
+      const prod = products.find(p => p.name === l.productName);
       return {
         'Waktu': formatDateTimeFull(l.timestamp),
+        'ID Produk': prod?.id || item?.productId || '-',
         'Tipe': l.type,
         'Barang': l.productName,
         'Qty': Math.abs(Number(l.quantityChange || 0)),
-        'Unit': products.find(p => p.name === l.productName)?.unit || '',
+        'Unit': prod?.unit || '',
         'Batch': item?.batchCode || l.stockItemId || '-',
         'Supplier': item?.supplier || '-',
         'Kedatangan': item?.arrivalDate ? formatDateReadable(item.arrivalDate) : '-',
@@ -828,29 +835,45 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
           <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-[11px] border-collapse min-w-[600px]">
               <thead className="bg-slate-50 text-slate-500 font-black uppercase text-[8px] tracking-widest border-b border-slate-100">
-                <tr><th className="px-6 py-5">Waktu</th><th className="px-6 py-5">Nama Barang</th><th className="px-6 py-5 text-center">Tipe</th><th className="px-6 py-5 text-right">Mutasi QTY</th><th className="px-6 py-5">Note / Penerima</th><th className="px-6 py-5 text-center">Petugas</th></tr>
+                <tr><th className="px-6 py-5">Waktu</th><th className="px-6 py-5">ID</th><th className="px-6 py-5">Nama Barang</th><th className="px-6 py-5 text-center">Tipe</th><th className="px-6 py-5 text-right">Mutasi QTY</th><th className="px-6 py-5">Note / Penerima</th><th className="px-6 py-5 text-center">Petugas</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-bold">
                 {filteredLogs.map(log => {
                   const item = getItem(log.stockItemId);
+                  const prod = products.find(p => p.name === log.productName);
+                  const productId = prod?.id || item?.productId || '-';
                   return (
                     <tr key={log.id} className="hover:bg-slate-50/50">
                       <td className="px-6 py-4 font-bold text-slate-400 whitespace-nowrap">{formatDateTimeFull(log.timestamp)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className="text-[10px] font-mono font-black text-slate-800 bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg">
+                          {productId}
+                        </span>
+                      </td>
                       <td className="px-6 py-4 min-w-[220px]">
                         <div className="flex justify-between items-center">
                           <div className="flex-1 min-w-0">
                             <div className="font-black text-slate-800 uppercase tracking-tight truncate">{log.productName}</div>
-                            {item && (
+                            {(item || (log.stockItemId && log.stockItemId !== 'SYSTEM-MIGRATION')) && (
                               <div className="flex flex-wrap items-center gap-2 mt-1">
-                                <span className="text-[8px] font-black text-slate-500 uppercase bg-slate-50 px-2 py-0.5 rounded border">BATCH: {item.batchCode}</span>
-                                {item.supplier && (
-                                  <span className="text-[8px] font-black text-blue-500 uppercase bg-blue-50 px-2 py-0.5 rounded border border-blue-100 flex items-center gap-1">
-                                    <Truck size={8} /> {item.supplier}
+                                {log.stockItemId && log.stockItemId !== 'SYSTEM-MIGRATION' && (
+                                  <span className="text-[8px] font-mono font-bold text-slate-500 uppercase bg-slate-50 px-2 py-0.5 rounded border" title={`ID Unit: ${log.stockItemId}`}>
+                                    ID UNIT: {log.stockItemId}
                                   </span>
                                 )}
-                                <span className="text-[8px] font-black text-slate-500 uppercase bg-slate-50 px-2 py-0.5 rounded border">IN: {formatDateReadable(item.arrivalDate)}</span>
-                                {item.expiryDate && item.expiryDate !== '-' && item.expiryDate !== 'NOEXP' && (
-                                  <span className="text-[8px] font-black text-red-500 uppercase bg-red-50/50 px-2 py-0.5 rounded border border-red-100">EXP: {formatDateReadable(item.expiryDate)}</span>
+                                {item && (
+                                  <>
+                                    <span className="text-[8px] font-black text-slate-500 uppercase bg-slate-50 px-2 py-0.5 rounded border">BATCH: {item.batchCode}</span>
+                                    {item.supplier && (
+                                      <span className="text-[8px] font-black text-blue-500 uppercase bg-blue-50 px-2 py-0.5 rounded border border-blue-100 flex items-center gap-1">
+                                        <Truck size={8} /> {item.supplier}
+                                      </span>
+                                    )}
+                                    <span className="text-[8px] font-black text-slate-500 uppercase bg-slate-50 px-2 py-0.5 rounded border">IN: {formatDateReadable(item.arrivalDate)}</span>
+                                    {item.expiryDate && item.expiryDate !== '-' && item.expiryDate !== 'NOEXP' && (
+                                      <span className="text-[8px] font-black text-red-500 uppercase bg-red-50/50 px-2 py-0.5 rounded border border-red-100">EXP: {formatDateReadable(item.expiryDate)}</span>
+                                    )}
+                                  </>
                                 )}
                               </div>
                             )}
@@ -882,11 +905,14 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
           <div className="md:hidden divide-y divide-slate-100">
             {filteredLogs.map((log) => {
               const item = getItem(log.stockItemId);
+              const prod = products.find(p => p.name === log.productName);
+              const productId = prod?.id || item?.productId || '-';
               return (
                 <div key={log.id} className="p-5 flex flex-col gap-3">
                   <div className="flex justify-between items-start">
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2">
                       <span className={`px-2 py-0.5 rounded-lg text-[8px] font-black uppercase border ${log.type === 'IN' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : log.type === 'OUT' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-blue-50 text-blue-600'}`}>{log.type}</span>
+                      <span className="text-[8.5px] font-mono font-black text-slate-700 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">{productId}</span>
                       <span className="text-[9px] font-bold text-slate-400">{formatDateTimeFull(log.timestamp)}</span>
                     </div>
                     {isSuperAdmin && (
@@ -899,15 +925,24 @@ const History: React.FC<HistoryProps> = ({ logs, products, stock, currentUser, o
                   <div className="flex justify-between items-start gap-4">
                     <div className="flex-1 min-w-0">
                       <h4 className="text-[12px] font-black text-slate-900 uppercase truncate leading-tight">{log.productName}</h4>
-                      {item && (
+                      {(item || (log.stockItemId && log.stockItemId !== 'SYSTEM-MIGRATION')) && (
                         <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                          <span className="text-[7.5px] font-black text-slate-400 uppercase bg-slate-50 px-1.5 py-0.5 rounded border">BATCH: {item.batchCode}</span>
-                          {item.supplier && (
-                            <span className="text-[7.5px] font-black text-blue-500 uppercase bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">{item.supplier}</span>
+                          {log.stockItemId && log.stockItemId !== 'SYSTEM-MIGRATION' && (
+                            <span className="text-[7.5px] font-mono font-bold text-slate-500 uppercase bg-slate-50 px-1.5 py-0.5 rounded border">
+                              ID UNIT: {log.stockItemId}
+                            </span>
                           )}
-                          <span className="text-[7.5px] font-black text-slate-400 uppercase bg-slate-50 px-1.5 py-0.5 rounded border">IN: {formatDateReadable(item.arrivalDate)}</span>
-                          {item.expiryDate && item.expiryDate !== '-' && item.expiryDate !== 'NOEXP' && (
-                            <span className="text-[7.5px] font-black text-red-500 uppercase bg-red-50/50 px-1.5 py-0.5 rounded border border-red-100">EXP: {formatDateReadable(item.expiryDate)}</span>
+                          {item && (
+                            <>
+                              <span className="text-[7.5px] font-black text-slate-400 uppercase bg-slate-50 px-1.5 py-0.5 rounded border">BATCH: {item.batchCode}</span>
+                              {item.supplier && (
+                                <span className="text-[7.5px] font-black text-blue-500 uppercase bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">{item.supplier}</span>
+                              )}
+                              <span className="text-[7.5px] font-black text-slate-400 uppercase bg-slate-50 px-1.5 py-0.5 rounded border">IN: {formatDateReadable(item.arrivalDate)}</span>
+                              {item.expiryDate && item.expiryDate !== '-' && item.expiryDate !== 'NOEXP' && (
+                                <span className="text-[7.5px] font-black text-red-500 uppercase bg-red-50/50 px-1.5 py-0.5 rounded border border-red-100">EXP: {formatDateReadable(item.expiryDate)}</span>
+                              )}
+                            </>
                           )}
                         </div>
                       )}
